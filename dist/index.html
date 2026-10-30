@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Amnezia Control — управление конфигурациями AmneziaWG и WireGuard." />
+  <title>Amnezia Control — панель управления</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <section class="login-screen" id="loginScreen">
+    <div class="login-orbit login-orbit-a"></div><div class="login-orbit login-orbit-b"></div>
+    <div class="login-card"><div class="brand login-brand"><div class="brand-mark"><span></span><span></span><span></span></div><div><strong>amnezia</strong><small>control / 01</small></div></div><span class="eyebrow">ЗАКРЫТАЯ ПАНЕЛЬ</span><h1>Вход в Control</h1><p class="login-subtitle">Управление конфигурациями вашего VPN-сервера.</p><form id="loginForm"><label>Логин<input id="loginUser" value="admin" autocomplete="username" /></label><label>Пароль<div class="password-wrap"><input id="loginPass" type="password" value="amnezia-demo" autocomplete="current-password" /><button type="button" id="togglePass">Показать</button></div></label><div class="login-options"><label class="check-label"><input type="checkbox" checked /> Запомнить на этом устройстве</label><a href="#">Восстановить доступ</a></div><button class="login-btn" type="submit">Войти в панель <span>→</span></button></form><div class="demo-note"><span>✦</span><div><strong>Демо-режим</strong><small>admin / amnezia-demo · подключение VPS добавим на следующем шаге</small></div></div></div><div class="login-footer">Amnezia Control <span>·</span> безопасное управление доступами</div>
+  </section>
+  <div class="app-shell" id="appShell" style="display:none">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark"><span></span><span></span><span></span></div>
+        <div><strong>amnezia</strong><small>control / 01</small></div>
+      </div>
+      <div class="workspace-switcher"><span class="workspace-dot"></span><span>Основной сервер</span><i>⌄</i></div>
+      <nav class="nav" aria-label="Основная навигация">
+        <p class="nav-label">Рабочее пространство</p>
+        <button class="nav-item active" data-section="overview"><span class="nav-icon">◈</span>Обзор</button>
+        <button class="nav-item" data-section="clients"><span class="nav-icon">◎</span>Клиенты <em>12</em></button>
+        <button class="nav-item" data-section="servers"><span class="nav-icon">▦</span>Серверы</button>
+        <button class="nav-item" data-section="imports"><span class="nav-icon">↥</span>Импорт</button>
+        <p class="nav-label second">Система</p>
+        <button class="nav-item" data-section="settings"><span class="nav-icon">◌</span>Настройки</button>
+        <button class="nav-item" data-section="docs"><span class="nav-icon">▤</span>Документация</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="upgrade-card"><div class="upgrade-icon">✦</div><strong>Все под контролем</strong><span>Готово к подключению VPS</span><button>Настроить сервер →</button></div>
+        <div class="user-row"><div class="avatar">АК</div><div><strong>Алексей К.</strong><span>Администратор</span></div><button class="dots">•••</button></div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar"><div class="breadcrumb"><span>Основной сервер</span><b>/</b><strong>Обзор</strong></div><div class="top-actions"><button class="icon-btn" title="Уведомления">♧<i></i></button><button class="help-btn">?</button><div class="top-avatar">АК</div></div></header>
+      <div class="page-wrap">
+        <section class="page-heading"><div><div class="eyebrow"><span class="pulse"></span>СИСТЕМА ОНЛАЙН</div><h1>Добрый день, Алексей <span>✦</span></h1><p>Управляйте доступами и конфигурациями с одного экрана.</p></div><button class="primary-btn" id="openCreate"><span>＋</span>Создать конфигурацию</button></section>
+        <section class="hero-banner"><div class="hero-glow"></div><div class="hero-copy"><span class="banner-kicker">НОВОЕ В AMNEZIAWG 3.1</span><h2>Тихое подключение.<br><em>Полный контроль.</em></h2><p>Защитите клиентов от DPI с актуальными параметрами протокола.</p><button class="text-btn" data-section="docs">Изучить параметры <span>↗</span></button></div><div class="hero-visual"><div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><div class="shield">⌁</div><div class="node n1">WG</div><div class="node n2">3.1</div><div class="node n3">↯</div></div></section>
+        <section class="stats-grid"><article class="stat-card"><div class="stat-top"><span>Активные клиенты</span><span class="stat-icon violet">◎</span></div><div class="stat-value">12 <small>/ 25</small></div><div class="progress"><span style="width:48%"></span></div><div class="stat-foot"><span>48% лимита</span><a href="#clients" data-section="clients">Управлять →</a></div></article><article class="stat-card"><div class="stat-top"><span>Трафик за месяц</span><span class="stat-icon cyan">⌁</span></div><div class="stat-value">184.6 <small>ГБ</small></div><div class="stat-foot"><span class="trend up">↑ 12.4%</span><span>к прошлому месяцу</span></div><div class="sparkline"><i style="height:42%"></i><i style="height:58%"></i><i style="height:48%"></i><i style="height:72%"></i><i style="height:56%"></i><i style="height:84%"></i><i style="height:66%"></i><i style="height:92%"></i><i style="height:78%"></i></div></article><article class="stat-card"><div class="stat-top"><span>Версия протокола</span><span class="stat-icon orange">✦</span></div><div class="stat-value version">AmneziaWG <strong>3.1</strong></div><div class="stat-foot"><span class="status-pill">Актуально</span><a href="#docs" data-section="docs">Подробнее →</a></div></article><article class="stat-card"><div class="stat-top"><span>Сервер</span><span class="stat-icon green">◉</span></div><div class="server-line"><span class="server-dot"></span><strong>Amsterdam · NL</strong></div><div class="stat-foot"><span>45.92.18.204</span><span class="latency">19 ms</span></div></article></section>
+        <section class="content-grid"><div class="panel clients-panel"><div class="panel-header"><div><h3>Последние клиенты</h3><p>Быстрый доступ к конфигурациям</p></div><button class="ghost-btn" data-section="clients">Все клиенты <span>→</span></button></div><div class="table-tools"><div class="search-box"><span>⌕</span><input id="searchInput" placeholder="Поиск по имени или адресу" /></div><div class="filter-select"><span>Все статусы</span>⌄</div></div><div class="client-table"><div class="table-head"><span>Клиент</span><span>Протокол</span><span>Трафик</span><span>Статус</span><span></span></div><div id="clientRows"></div></div></div><div class="panel activity-panel"><div class="panel-header"><div><h3>Активность</h3><p>Последние события в панели</p></div><button class="more-btn">•••</button></div><div class="activity-list"><div class="activity-item"><div class="activity-badge cyan">＋</div><div><strong>Создан клиент User 12</strong><span>Сегодня, 10:42 · AmneziaWG 3.1</span></div></div><div class="activity-item"><div class="activity-badge violet">↥</div><div><strong>Конфигурация скачана</strong><span>Сегодня, 09:18 · User 08</span></div></div><div class="activity-item"><div class="activity-badge orange">↻</div><div><strong>Обновлены параметры</strong><span>Вчера, 18:36 · Основной сервер</span></div></div><div class="activity-item"><div class="activity-badge green">✓</div><div><strong>Сервер подключён</strong><span>Вчера, 16:02 · Amsterdam · NL</span></div></div></div><button class="activity-link">Показать всю активность <span>→</span></button></div></section>
+        <section class="tip-row"><div class="tip-mark">✦</div><div><strong>Совет для 3.1</strong><span>Используйте одинаковые S1, S2 и H1–H4 на сервере и клиентах. Jc, Jmin и Jmax можно варьировать для каждого подключения.</span></div><button data-section="docs">Открыть справочник →</button></section>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="createModal" aria-hidden="true"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><div><span class="eyebrow">НОВАЯ КОНФИГУРАЦИЯ</span><h2 id="modalTitle">Создать клиентов</h2></div><button class="close-btn" id="closeModal">×</button></div><div class="stepper"><span class="step active"><b>1</b>Параметры</span><i></i><span class="step"><b>2</b>Клиенты</span><i></i><span class="step"><b>3</b>Готово</span></div><form id="createForm"><label>Протокол<div class="protocol-cards"><button type="button" class="protocol-card selected" data-protocol="AmneziaWG 3.1"><span class="protocol-logo">⌁</span><span><strong>AmneziaWG</strong><small>Версия 3.1 · рекомендуется</small></span><span class="radio"></span></button><button type="button" class="protocol-card" data-protocol="WireGuard"><span class="protocol-logo wg">W</span><span><strong>WireGuard</strong><small>Стандартный протокол</small></span><span class="radio"></span></button></div></label><div class="form-row"><label>Количество клиентов<input type="number" id="clientCount" min="1" max="25" value="3" /></label><label>Лимит трафика<select id="trafficLimit"><option>Без ограничений</option><option>50 ГБ / месяц</option><option>100 ГБ / месяц</option><option>250 ГБ / месяц</option></select></label></div><div class="form-row"><label>Срок действия<select id="expiry"><option>Без срока</option><option>30 дней</option><option>90 дней</option><option>1 год</option></select></label><label>Префикс имени<input id="namePrefix" value="User" /></label></div><label>Описание <span class="optional">необязательно</span><textarea id="description" placeholder="Например, команда дизайна или семейные устройства"></textarea></label><div class="modal-foot"><button type="button" class="cancel-btn" id="cancelCreate">Отменить</button><button type="submit" class="primary-btn">Создать клиентов <span>→</span></button></div></form></div></div>
+  <div class="toast" id="toast"><span>✓</span><div><strong>Конфигурации созданы</strong><small id="toastText">Клиенты добавлены в рабочее пространство.</small></div></div>
+  <script src="app.js"></script>
+</body>
+</html>
+
