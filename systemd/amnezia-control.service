@@ -1,0 +1,17 @@
+[Unit]
+Description=Amnezia Control self-hosted VPN panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/amnezia-control
+Environment=AMNEZIA_CONTROL_ROOT=/opt/amnezia-control
+Environment=AMNEZIA_CONTROL_DATA=/var/lib/amnezia-control
+ExecStart=/opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/app.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
