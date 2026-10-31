@@ -12,6 +12,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 if [[ $EUID -ne 0 ]]; then echo "Run as root: sudo ./scripts/install.sh"; exit 1; fi
+if [[ -f /etc/wireguard/wg0.conf || -f /etc/wireguard/awg0.conf || -f "$DATA_DIR/control.db" ]]; then
+  echo "Existing VPN configuration or database detected. Installation stopped to preserve keys and clients. Use backup and update instead."
+  exit 1
+fi
 LANG_CODE="${LANG_CODE:-}"; [[ -n "$LANG_CODE" ]] || { read -r -p "Language / Язык (ru/en) [ru]: " LANG_CODE; LANG_CODE=${LANG_CODE:-ru}; }
 read -r -p "Panel admin login [admin]: " ADMIN_USER; ADMIN_USER=${ADMIN_USER:-admin}
 read -r -s -p "Panel admin password: " ADMIN_PASS; echo
@@ -29,7 +33,8 @@ if [[ ! -d "$APP_DIR/.git" ]]; then
 fi
 python3 -m venv "$APP_DIR/.venv"; "$APP_DIR/.venv/bin/pip" install --upgrade pip; "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 mkdir -p "$DATA_DIR" /etc/amnezia-control
-HASH=$("$APP_DIR/.venv/bin/python" -c 'import sys;sys.path.insert(0,"backend");from app import hash_password;print(hash_password(sys.argv[1]))' "$ADMIN_PASS")
+HASH=$(printf '%s' "$ADMIN_PASS" | "$APP_DIR/.venv/bin/python" "$APP_DIR/backend/password_hash.py")
+unset ADMIN_PASS
 VPN_BIN=wg; [[ "$VPN_ENGINE" == "amneziawg" ]] && command -v awg >/dev/null 2>&1 && VPN_BIN=awg
 VPN_PRIVATE=$(umask 077; "$VPN_BIN" genkey)
 VPN_PUBLIC=$(printf '%s\n' "$VPN_PRIVATE" | "$VPN_BIN" pubkey)
