@@ -47,7 +47,7 @@ install -m 644 "$APP_DIR/systemd/ac-awg@.service" /etc/systemd/system/ac-awg@.se
 systemctl daemon-reload
 systemctl reset-failed amnezia-control
 systemctl start amnezia-control
-curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:8090/api/me >/dev/null
+bash "$APP_DIR/scripts/wait-panel.sh"
 systemctl is-active --quiet amnezia-control
 trap - ERR
 printf 'Updated successfully. Backup / Копия: %s\n' "$BACKUP_DIR"

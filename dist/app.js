@@ -124,3 +124,7 @@ updateImportMode();
 
 Object.assign(en,{migrationTitle:'Transfer without losing keys',migrationSubtitle:'Inspect first. Transfer the selected connection after review.',importMode:'What to transfer',moveServer:'From another server — backup / server .conf',moveClients:'Client .conf files into an existing connection',migrationEndpoint:'VPN endpoint for downloaded configurations',chooseImport:'Choose a backup and client .conf files',importFormats:'.tar.gz, .zip, .conf · 8 MiB total',sourceServer:'Connection inside the backup',migrationNote:'Original keys are preserved. Archive scripts are never executed. A database snapshot is saved before applying.',backFiles:'← Back to files',checkImport:'Check files',applyImport:'Transfer connections',localWorkspace:'YOUR VPN WORKSPACE',welcomeTitle:'Your connections, under control.',welcomeNote:'Your server. Your clients. One clear workspace.'});
 translate();
+
+Object.assign(en,{settingsGeneral:'VPN & account',settingsAccess:'Address & backups'});
+$('.settings-tabs').onclick=e=>{const button=e.target.closest('[data-settings-tab]');if(!button)return;$('#settingsPage').dataset.tab=button.dataset.settingsTab;document.querySelector('[data-settings-pane='+button.dataset.settingsTab+']').scrollTop=0;$$('[data-settings-tab]').forEach(el=>el.setAttribute('aria-pressed',String(el===button)));};
+translate();

@@ -70,7 +70,7 @@ systemctl enable --now nginx
 export PANEL_DOMAIN PANEL_PORT PANEL_IP
 "$APP_DIR/.venv/bin/python" -c 'import os,json;print(json.dumps(dict(domain=os.environ["PANEL_DOMAIN"],port=int(os.environ["PANEL_PORT"]),ip=os.environ["PANEL_IP"])))' | "$APP_DIR/.venv/bin/python" "$APP_DIR/backend/manage.py" panel
 systemctl enable --now amnezia-control
-curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:8090/api/me >/dev/null
+bash "$APP_DIR/scripts/wait-panel.sh"
 systemctl is-active --quiet amnezia-control
 if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then ufw allow "$PANEL_PORT/tcp"; ufw allow 51820/udp; ufw allow 51821/udp; fi
 say 'Установка завершена.' 'Installation complete.'
