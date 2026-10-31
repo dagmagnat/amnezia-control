@@ -1,132 +1,342 @@
-#!/usr/bin/env python3
-import base64, hashlib, hmac, json, os, secrets, sqlite3, subprocess, time
-from pathlib import Path
+"""Amnezia Control HTTP application. All records are local to this VPS."""
+import base64
+import io
+import ipaddress
+import json
+import os
+import re
+import secrets
+import shutil
+import threading
+import time
+from collections import defaultdict
 from functools import wraps
-from flask import Flask, jsonify, request, session, send_from_directory, abort
+from pathlib import Path
+from flask import Flask, abort, jsonify, request, send_from_directory, session
+from werkzeug.exceptions import HTTPException
+from core import (Problem, GENERATIONS, PARAMS, command, keys, key, number, host,
+                  endpoint, parameters, parse_config, binary, config_path, atomic_text, service)
+import state
+from password_hash import hash_password
+import hashlib
+import hmac
 
-ROOT = Path(os.environ.get('AMNEZIA_CONTROL_ROOT', '/opt/amnezia-control'))
-DATA = Path(os.environ.get('AMNEZIA_CONTROL_DATA', '/var/lib/amnezia-control'))
-DB = Path(os.environ.get('AMNEZIA_CONTROL_DB', DATA / 'control.db'))
-VPN_DIR = Path(os.environ.get('AMNEZIA_CONTROL_VPN_DIR', '/etc/wireguard'))
-DIST = ROOT / 'dist'
-DATA.mkdir(parents=True, exist_ok=True)
-app = Flask(__name__, static_folder=str(DIST), static_url_path='')
-app.secret_key = os.environ.get('AMNEZIA_CONTROL_SECRET', secrets.token_hex(32))
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+ROOT=Path(os.environ.get('AMNEZIA_CONTROL_ROOT',Path(__file__).resolve().parents[1]))
+DIST=ROOT/'dist'
+app=Flask(__name__,static_folder=None)
+app.secret_key=os.environ.get('AMNEZIA_CONTROL_SECRET') or secrets.token_hex(32)
+app.config.update(MAX_CONTENT_LENGTH=2*1024*1024,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Strict',PERMANENT_SESSION_LIFETIME=28800)
+ATTEMPTS=defaultdict(list)
 
-SCHEMA = '''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT DEFAULT '', protocol TEXT NOT NULL, version TEXT NOT NULL, address TEXT NOT NULL UNIQUE, public_key TEXT NOT NULL, private_key TEXT NOT NULL, preshared_key TEXT DEFAULT '', endpoint TEXT DEFAULT '', traffic_limit TEXT DEFAULT '', expires_at TEXT DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, config TEXT NOT NULL);'''
+@app.before_request
+def origin_check():
+    if request.path.startswith('/api/') and request.method not in ('GET','HEAD','OPTIONS'):
+        if not hmac.compare_digest(str(session.get('csrf','')),str(request.headers.get('X-CSRF-Token',''))) or not session.get('csrf'):
+            raise Problem('Session expired. Reload the page.',403)
 
-def db():
-    con = sqlite3.connect(DB); con.row_factory = sqlite3.Row; con.executescript(SCHEMA); return con
+@app.after_request
+def no_cache(response):
+    response.headers['Cache-Control']='no-store'
+    response.headers['X-Content-Type-Options']='nosniff'
+    response.headers['X-Frame-Options']='DENY'
+    response.headers['Referrer-Policy']='same-origin'
+    return response
 
-def setting(key, default=''):
-    row = db().execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone(); return row['value'] if row else default
+@app.errorhandler(Problem)
+def problem(exc): return jsonify(error=str(exc)),exc.status
 
-def hash_password(value):
-    salt = secrets.token_bytes(16); digest = hashlib.scrypt(value.encode(), salt=salt, n=16384, r=8, p=1); return base64.b64encode(salt + digest).decode()
+@app.errorhandler(HTTPException)
+def http_error(exc): return jsonify(error=exc.description),exc.code
 
-def verify_password(value, encoded):
-    raw = base64.b64decode(encoded); return hmac.compare_digest(hashlib.scrypt(value.encode(), salt=raw[:16], n=16384, r=8, p=1), raw[16:])
+@app.errorhandler(Exception)
+def unexpected(exc):
+    app.logger.error('Request failed (%s)',type(exc).__name__)
+    return jsonify(error='Internal error. Check service journal.'),500
 
-def run(*args, input=None):
-    try: return subprocess.run(args, input=input, text=True, capture_output=True, check=True, timeout=15).stdout.strip()
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired): return ''
-
-def keypair(binary):
-    private = run(binary, 'genkey') or base64.b64encode(secrets.token_bytes(32)).decode(); public = run(binary, 'pubkey', input=private + '\n') or base64.b64encode(secrets.token_bytes(32)).decode(); return private, public
-
-def vpn_engine():
-    preferred = setting('vpn_engine', 'wireguard')
-    if preferred == 'amneziawg' and run('which', 'awg'): return 'awg'
-    return 'wg' if run('which', 'wg') else preferred
-
-def apply_peer(row):
-    engine = vpn_engine(); interface = setting('vpn_interface', 'wg0')
-    if not run('which', engine): return False
-    try:
-        subprocess.run([engine, 'set', interface, 'peer', row['public_key'], 'preshared-key', '/dev/stdin', 'allowed-ips', row['address']], input=row['preshared_key'], text=True, capture_output=True, check=True, timeout=10)
-        return True
-    except (subprocess.SubprocessError, OSError): return False
-
-def login_required(fn):
+def auth(fn):
     @wraps(fn)
-    def inner(*args, **kwargs):
-        if not session.get('user'): return jsonify(error='auth_required'), 401
-        return fn(*args, **kwargs)
-    return inner
+    def wrapped(*args,**kwargs):
+        with state.connection() as con:
+            valid=session.get('user') and session.get('revision','0')==state.value(con,'auth_revision','0')
+        if not valid: raise Problem('Please sign in',401)
+        return fn(*args,**kwargs)
+    return wrapped
 
-def next_address(con):
-    used = {r['address'] for r in con.execute('SELECT address FROM clients')}
-    for n in range(2, 254):
-        address = f'10.8.0.{n}/32'
-        if address not in used: return address
-    raise ValueError('client_limit_reached')
+def body(): return request.get_json(silent=True) or {}
 
-def render_config(row):
-    iface = 'awg0' if row['protocol'] == 'amneziawg' else 'wg0'
-    return f'''[Interface]\nPrivateKey = {row['private_key']}\nAddress = {row['address']}\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = {setting('server_public_key', '<SERVER_PUBLIC_KEY>')}\nPresharedKey = {row['preshared_key']}\nEndpoint = {row['endpoint'] or setting('endpoint', 'SERVER_IP:51820')}\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25\n# AmneziaWG version: {row['version']}\n# Interface: {iface}\n'''
+def password_ok(password, encoded):
+    try:
+        raw=base64.b64decode(encoded,validate=True)
+        return hmac.compare_digest(hashlib.scrypt(password.encode(),salt=raw[:16],n=16384,r=8,p=1),raw[16:])
+    except (ValueError,TypeError): return False
+
+def profile_by_id(con, ident):
+    row=con.execute('SELECT * FROM profiles WHERE id=?',(ident,)).fetchone()
+    if not row: raise Problem('VPN profile not found',404)
+    return dict(row)
+
+def client_by_id(con, ident):
+    row=con.execute('SELECT * FROM clients WHERE id=?',(ident,)).fetchone()
+    if not row: raise Problem('Client not found',404)
+    return dict(row)
+
+def public_client(row):
+    result={k:v for k,v in dict(row).items() if k not in ('private_key','preshared_key','config')}
+    result['downloadable']=bool(row['private_key'])
+    result['online']=bool(row['handshake'] and time.time()-row['handshake']<180)
+    return result
+
+def expiry(value):
+    if value in (None,'',0): return ''
+    return str(number(value,1,4102444800))
+
+@app.get('/api/me')
+def me():
+    session.setdefault('csrf',secrets.token_hex(32))
+    with state.connection() as con:
+        authenticated=bool(session.get('user') and session.get('revision','0')==state.value(con,'auth_revision','0'))
+        return jsonify(authenticated=authenticated,user=session.get('user') if authenticated else None,csrf=session['csrf'],language=state.value(con,'language','ru'))
 
 @app.post('/api/login')
 def login():
-    body = request.get_json(silent=True) or {}; user = setting('admin_user'); encoded = setting('admin_password')
-    if not user or not encoded or body.get('username') != user or not verify_password(body.get('password',''), encoded): return jsonify(error='invalid_credentials'), 401
-    session['user'] = user; return jsonify(ok=True, user=user)
+    data=body(); ip=request.remote_addr; now=time.time(); ATTEMPTS[ip]=[t for t in ATTEMPTS[ip] if now-t<300]
+    if len(ATTEMPTS[ip])>=10: raise Problem('Too many attempts. Wait 5 minutes.',429)
+    with state.connection() as con:
+        if data.get('username')!=state.value(con,'admin_user') or not password_ok(str(data.get('password','')),state.value(con,'admin_password')):
+            ATTEMPTS[ip].append(now); raise Problem('Invalid login or password',401)
+        session.clear(); session.update(user=data['username'],csrf=secrets.token_hex(32),revision=state.value(con,'auth_revision','0')); session.permanent=True
+        ATTEMPTS.pop(ip,None)
+    return jsonify(ok=True,csrf=session['csrf'])
 
 @app.post('/api/logout')
 def logout(): session.clear(); return jsonify(ok=True)
 
-@app.get('/api/me')
-def me(): return jsonify(authenticated=bool(session.get('user')), user=session.get('user'))
+@app.get('/api/summary')
+@auth
+def summary():
+    with state.connection() as con:
+        clients=[public_client(r) for r in con.execute('SELECT * FROM clients ORDER BY id')]
+        profiles=[]
+        for row in con.execute('SELECT * FROM profiles ORDER BY id'):
+            p=dict(row); _,error=state.ENGINE.stats(p)
+            profiles.append({k:v for k,v in p.items() if k!='private_key'} | {'active':not bool(error)})
+        events=[dict(r) for r in con.execute('SELECT * FROM events ORDER BY id DESC LIMIT 25')]
+        panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru')}
+    return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
+                   capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS},
+                   version='0.2.0')
 
 @app.get('/api/clients')
-@login_required
+@auth
 def clients():
-    rows = [dict(r) for r in db().execute('SELECT id,name,description,protocol,version,address,public_key,endpoint,traffic_limit,expires_at,enabled,created_at FROM clients ORDER BY id')]; return jsonify(clients=rows)
+    with state.connection() as con: return jsonify(clients=[public_client(r) for r in con.execute('SELECT * FROM clients ORDER BY id')])
+
+@app.post('/api/profiles')
+@auth
+def add_profile():
+    data=body(); protocol=data.get('protocol'); version=data.get('version')
+    if protocol not in ('wireguard','amneziawg'): raise Problem('Unknown protocol')
+    if protocol=='wireguard': version='wg'
+    elif version not in GENERATIONS: raise Problem('Unknown AmneziaWG generation')
+    b='awg' if protocol=='amneziawg' else 'wg'
+    if not shutil.which(b): raise Problem(b+' is not installed',503)
+    params=parameters(version,data.get('params')) if b=='awg' else {}
+    destination=endpoint(data.get('endpoint',''))
+    with state.LOCK,state.connection() as con:
+        n=con.execute('SELECT COALESCE(MAX(id),0)+1 n FROM profiles').fetchone()['n']
+        network=ipaddress.ip_network(data.get('subnet',f'10.77.{n}.0/24'))
+        if network.version!=4 or network.prefixlen!=24 or not network.is_private: raise Problem('Use a private IPv4 /24 subnet')
+        for row in con.execute('SELECT address FROM profiles'):
+            if network.overlaps(ipaddress.ip_interface(row['address']).network): raise Problem('Subnet overlaps another profile')
+        iface=f'ac{b}{n}'; port=number(data.get('port'),1024,65535)
+        if con.execute('SELECT 1 FROM profiles WHERE port=?',(port,)).fetchone(): raise Problem('UDP port already used')
+        if config_path({'interface':iface,'protocol':protocol}).exists(): raise Problem('Interface config already exists')
+        private,public=keys(b); name=str(data.get('name') or ('AmneziaWG '+version if b=='awg' else 'WireGuard')).strip()[:60]
+        cur=con.execute('INSERT INTO profiles(name,protocol,version,interface,address,port,endpoint,private_key,public_key,params) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            (name,protocol,version,iface,str(next(network.hosts()))+'/24',port,destination,private,public,json.dumps(params)))
+        p=profile_by_id(con,cur.lastrowid)
+        try: state.sync(con,p)
+        except Problem:
+            try: command('systemctl','stop',service(p))
+            except Problem: pass
+            try: command('systemctl','disable',service(p))
+            except Problem: pass
+            config_path(p).unlink(missing_ok=True)
+            raise
+        state.audit(con,'VPN profile created: '+name)
+    return jsonify(ok=True,id=p['id']),201
+
+@app.patch('/api/profiles/<int:ident>')
+@auth
+def edit_profile(ident):
+    data=body()
+    with state.LOCK,state.connection() as con:
+        p=profile_by_id(con,ident)
+        if 'endpoint' in data: p['endpoint']=endpoint(data['endpoint'])
+        if 'name' in data: p['name']=str(data['name']).strip()[:60]
+        # Existing obfuscation changes invalidate client files: explicit opt-in required.
+        if 'params' in data:
+            if not data.get('confirm_regenerate'): raise Problem('Confirm reissue of all client files',409)
+            p['params']=json.dumps(parameters(p['version'],data['params']))
+        con.execute('UPDATE profiles SET name=?,endpoint=?,params=? WHERE id=?',(p['name'],p['endpoint'],p['params'],ident))
+        if 'params' in data: state.sync(con,p)
+        state.audit(con,'VPN profile updated: '+p['name'])
+    return jsonify(ok=True)
 
 @app.post('/api/clients')
-@login_required
-def create_client():
-    body = request.get_json(silent=True) or {}; name = str(body.get('name','')).strip()[:30]
-    if not name: name = f"User {db().execute('SELECT COUNT(*) c FROM clients').fetchone()['c'] + 1:02d}"
-    protocol = body.get('protocol','amneziawg').lower(); version = body.get('version','3.1'); binary = 'awg' if protocol == 'amneziawg' and run('which','awg') else 'wg'
-    con = db(); address = next_address(con); private, public = keypair(binary); preshared = run(binary,'genpsk') or base64.b64encode(secrets.token_bytes(32)).decode(); now = int(time.time())
-    cur = con.execute('INSERT INTO clients(name,description,protocol,version,address,public_key,private_key,preshared_key,endpoint,traffic_limit,expires_at,created_at,config) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(name,str(body.get('description',''))[:500],protocol,version,address,public,private,preshared,str(body.get('endpoint','')),str(body.get('traffic_limit','')),str(body.get('expires_at','')),now,'')); client_id=cur.lastrowid
-    row=con.execute('SELECT * FROM clients WHERE id=?',(client_id,)).fetchone(); config=render_config(row); con.execute('UPDATE clients SET config=? WHERE id=?',(config,client_id)); con.commit(); apply_peer(row); return jsonify(client={**dict(row),'config':config}), 201
+@auth
+def add_clients():
+    data=body(); count=number(data.get('count',1),1,25)
+    name=str(data.get('name','')).strip()
+    if len(name)>30: raise Problem('Name limit: 30 characters')
+    quota=number(data.get('quota_bytes',0),0,10**16); expires=expiry(data.get('expires_at'))
+    with state.LOCK,state.connection() as con:
+        p=profile_by_id(con,data.get('profile_id')); first=int(state.value(con,'next_client_number','1'))
+        network=ipaddress.ip_interface(p['address']).network
+        taken={str(ipaddress.ip_interface(r['address']).ip) for r in con.execute('SELECT address FROM clients')}
+        taken.add(str(ipaddress.ip_interface(p['address']).ip))
+        free=[str(ip)+'/32' for ip in network.hosts() if str(ip) not in taken]
+        if len(free)<count: raise Problem('Subnet is full')
+        ids=[]
+        for i in range(count):
+            cname=(name if count==1 else (name[:26]+f' {i+1:02d}')) if name else f'User {first+i:02d}'
+            private,public=keys(binary(p)); psk=key(command(binary(p),'genpsk'))
+            cur=con.execute('INSERT INTO clients(name,description,protocol,version,address,public_key,private_key,preshared_key,endpoint,traffic_limit,expires_at,enabled,created_at,config,profile_id,quota_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (cname,str(data.get('description',''))[:500],p['protocol'],p['version'],free[i],public,private,psk,'','',expires,1,int(time.time()),'',p['id'],quota))
+            ids.append(cur.lastrowid); state.audit(con,'Client created: '+cname)
+        state.put(con,'next_client_number',first+count)
+        state.sync(con,p)
+    return jsonify(ok=True,ids=ids),201
 
-@app.get('/api/clients/<int:client_id>/config')
-@login_required
-def config(client_id):
-    row=db().execute('SELECT name,config FROM clients WHERE id=?',(client_id,)).fetchone();
-    if not row: abort(404)
-    return app.response_class(row['config'], mimetype='text/plain', headers={'Content-Disposition':f'attachment; filename="{row["name"]}.conf"'})
+@app.patch('/api/clients/<int:ident>')
+@auth
+def edit_client(ident):
+    data=body()
+    with state.LOCK,state.connection() as con:
+        c=client_by_id(con,ident); p=profile_by_id(con,c['profile_id'])
+        for name in ('name','description','endpoint'):
+            if name in data: c[name]=str(data[name]).strip()
+        if not c['name'] or len(c['name'])>30: raise Problem('Name: 1–30 characters')
+        if len(c['description'])>500: raise Problem('Description too long')
+        if c['endpoint']: c['endpoint']=endpoint(c['endpoint'])
+        if 'enabled' in data:
+            if type(data['enabled']) is not bool: raise Problem('enabled must be boolean')
+            c['enabled']=int(data['enabled'])
+        if 'quota_bytes' in data: c['quota_bytes']=number(data['quota_bytes'],0,10**16)
+        if 'expires_at' in data: c['expires_at']=expiry(data['expires_at'])
+        if data.get('reset_usage'): c['used_bytes']=0
+        c['blocked_reason']='quota' if c['quota_bytes'] and c['used_bytes']>=c['quota_bytes'] else ('expired' if c['expires_at'] and int(c['expires_at'])<time.time() else '')
+        names=['name','description','endpoint','enabled','quota_bytes','expires_at','used_bytes','blocked_reason']
+        con.execute('UPDATE clients SET '+','.join(k+'=?' for k in names)+' WHERE id=?',tuple(c[k] for k in names)+(ident,))
+        state.sync(con,p); state.audit(con,'Client updated: '+c['name'])
+    return jsonify(ok=True)
 
-@app.patch('/api/clients/<int:client_id>')
-@login_required
-def update_client(client_id):
-    body=request.get_json(silent=True) or {}; allowed={'name','description','endpoint','traffic_limit','expires_at','enabled'}; changes={k:body[k] for k in allowed if k in body};
-    if 'name' in changes: changes['name']=str(changes['name'])[:30]
-    if not changes: return jsonify(error='nothing_to_update'),400
-    con=db(); sets=', '.join(f'{k}=?' for k in changes); con.execute(f'UPDATE clients SET {sets} WHERE id=?',(*changes.values(),client_id)); con.commit(); return jsonify(ok=True)
+@app.delete('/api/clients/<int:ident>')
+@auth
+def delete_client(ident):
+    with state.LOCK,state.connection() as con:
+        c=client_by_id(con,ident); p=profile_by_id(con,c['profile_id'])
+        con.execute('UPDATE clients SET enabled=0 WHERE id=?',(ident,)); state.sync(con,p)
+        con.execute('DELETE FROM clients WHERE id=?',(ident,)); state.audit(con,'Client deleted: '+c['name'])
+    return jsonify(ok=True)
 
-@app.delete('/api/clients/<int:client_id>')
-@login_required
-def delete_client(client_id):
-    con=db(); row=con.execute('SELECT * FROM clients WHERE id=?',(client_id,)).fetchone();
-    if row: run(vpn_engine(), 'set', setting('vpn_interface','wg0'), 'peer', row['public_key'], 'remove')
-    con.execute('DELETE FROM clients WHERE id=?',(client_id,)); con.commit(); return jsonify(ok=True)
+@app.get('/api/clients/<int:ident>/config')
+@auth
+def config(ident):
+    with state.connection() as con:
+        c=client_by_id(con,ident); text=state.client_config(c,profile_by_id(con,c['profile_id']))
+    return app.response_class(text,mimetype='text/plain',headers={'Content-Disposition':f'attachment; filename="client-{ident}.conf"'})
 
-@app.get('/api/status')
-@login_required
-def status():
-    return jsonify(wg=bool(run('which','wg')), awg=bool(run('which','awg')), nginx=bool(run('systemctl','is-active','nginx')), service=bool(run('systemctl','is-active','amnezia-control')))
+@app.get('/api/clients/<int:ident>/qr')
+@auth
+def qr(ident):
+    import qrcode
+    with state.connection() as con:
+        c=client_by_id(con,ident); text=state.client_config(c,profile_by_id(con,c['profile_id']))
+    out=io.BytesIO(); qrcode.make(text).save(out,format='PNG')
+    return app.response_class(out.getvalue(),mimetype='image/png')
 
-@app.route('/', defaults={'path': ''})
+@app.post('/api/import')
+@auth
+def import_client():
+    # Existing client .conf can be adopted only with its original server identity.
+    upload=request.files.get('file')
+    if not upload: raise Problem('Choose a client .conf file')
+    interface,peer=parse_config(upload.read(65537).decode('utf-8-sig'))
+    with state.LOCK,state.connection() as con:
+        p=profile_by_id(con,request.form.get('profile_id'))
+        if peer['PublicKey']!=p['public_key']: raise Problem('Different server key. Import the original SERVER configuration first; replacing the client key would break migration.',409)
+        for k in PARAMS:
+            if interface.get(k)!=json.loads(p['params']).get(k): raise Problem('Obfuscation parameters do not match the server: '+k,409)
+        address=ipaddress.ip_interface(interface.get('Address',''))
+        if address.version!=4 or address.ip not in ipaddress.ip_interface(p['address']).network: raise Problem('Client address does not belong to this profile')
+        private=interface['PrivateKey']; public=key(command(binary(p),'pubkey',input=private+'\n'))
+        name=str(request.form.get('name') or upload.filename.rsplit('.',1)[0])[:30]
+        if con.execute('SELECT 1 FROM clients WHERE public_key=? OR address=?',(public,str(address.ip)+'/32')).fetchone(): raise Problem('Client already exists',409)
+        destination=endpoint(peer['Endpoint'])
+        stored='[Interface]\n'+'\n'.join(k+' = '+v for k,v in interface.items())+'\n\n[Peer]\n'+'\n'.join(k+' = '+v for k,v in peer.items())+'\n'
+        cur=con.execute('INSERT INTO clients(name,description,protocol,version,address,public_key,private_key,preshared_key,endpoint,created_at,profile_id,config) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+            (name,'Imported .conf',p['protocol'],p['version'],str(address.ip)+'/32',public,private,peer.get('PresharedKey',''),destination,int(time.time()),p['id'],stored))
+        state.sync(con,p); state.audit(con,'Client imported: '+name)
+    return jsonify(ok=True,id=cur.lastrowid),201
+
+@app.patch('/api/settings')
+@auth
+def settings():
+    data=body()
+    with state.connection() as con:
+        if 'language' in data:
+            if data['language'] not in ('ru','en'): raise Problem('Unknown language')
+            state.put(con,'language',data['language'])
+        if data.get('password'):
+            if not password_ok(str(data.get('current_password','')),state.value(con,'admin_password')): raise Problem('Invalid current password',403)
+            if len(data['password'])<10: raise Problem('Password: at least 10 characters')
+            state.put(con,'admin_password',hash_password(data['password'])); revision=secrets.token_hex(16)
+            state.put(con,'auth_revision',revision); session['revision']=revision
+        state.audit(con,'Panel settings updated')
+    return jsonify(ok=True)
+
+@app.get('/api/backup')
+@auth
+def backup():
+    import sqlite3
+    memory=sqlite3.connect(':memory:')
+    with state.connection() as con: con.backup(memory)
+    data='\n'.join(memory.iterdump()); memory.close()
+    # Includes all server/client private keys. Authenticated, no-store download only.
+    return app.response_class(data,mimetype='application/sql',headers={'Content-Disposition':'attachment; filename="amnezia-control.sql"'})
+
+@app.patch('/api/panel-access')
+@auth
+def access_settings():
+    from manage import panel_address
+    cfg=body();domain=host(cfg['domain']) if cfg.get('domain') else ''
+    try: ip=str(ipaddress.ip_address(cfg.get('ip','')))
+    except ValueError: raise Problem('Invalid public IP')
+    port=number(cfg.get('port'),1024,65535)
+    existing=Path('/etc/nginx/sites-available/amnezia-control')
+    if existing.exists() and 'ssl_certificate' in existing.read_text():
+        raise Problem('HTTPS is configured. Use panel-address.sh on the VPS to preserve your certificate setup.',409)
+    panel_address(domain,port,ip)
+    address=domain or ('['+ip+']' if ':' in ip else ip)
+    return jsonify(ok=True,url=f'http://{address}:{port}')
+
+@app.route('/',defaults={'path':''})
 @app.route('/<path:path>')
 def spa(path):
-    target = DIST / path
-    if path and target.exists(): return send_from_directory(DIST, path)
-    return send_from_directory(DIST, 'index.html')
+    if path.startswith('api/'): abort(404)
+    return send_from_directory(DIST,path or 'index.html')
 
-if __name__ == '__main__': app.run(host='127.0.0.1', port=int(os.environ.get('PORT','8090')))
+def monitor():
+    while True:
+        try: state.refresh()
+        except Exception as e: app.logger.error('Reconciliation failed (%s)',type(e).__name__)
+        time.sleep(10)
+
+def start():
+    state.initialize()
+    threading.Thread(target=monitor,daemon=True).start()
+    from waitress import serve
+    serve(app,host='127.0.0.1',port=int(os.environ.get('PORT','8090')),threads=4)
+
+if __name__=='__main__': start()

@@ -1,17 +1,24 @@
 [Unit]
-Description=Amnezia Control self-hosted VPN panel
+Description=Amnezia Control VPN panel
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/amnezia-control
-Environment=AMNEZIA_CONTROL_ROOT=/opt/amnezia-control
-Environment=AMNEZIA_CONTROL_DATA=/var/lib/amnezia-control
+EnvironmentFile=/etc/amnezia-control/panel.env
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/app.py
 Restart=on-failure
-RestartSec=3
+RestartSec=5
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/amnezia-control /etc/wireguard /etc/amnezia/amneziawg /etc/systemd/system /etc/nginx/sites-available /etc/nginx/sites-enabled
 
 [Install]
 WantedBy=multi-user.target

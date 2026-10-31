@@ -1,0 +1,17 @@
+[Unit]
+Description=Amnezia Control AWG userspace interface %i
+After=network-online.target
+Wants=network-online.target
+Before=amnezia-control.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/tunnel.py up %i
+ExecStop=/opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/tunnel.py down %i
+TimeoutStartSec=60
+UMask=0077
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target

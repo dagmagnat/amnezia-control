@@ -1,71 +1,82 @@
-const initialClients = [
-  {name:'User 12',ip:'10.8.0.12',protocol:'3.1',traffic:'18.4 ГБ',color:'violet'},
-  {name:'Дизайн · MacBook',ip:'10.8.0.08',protocol:'3.1',traffic:'42.8 ГБ',color:'cyan'},
-  {name:'User 07',ip:'10.8.0.07',protocol:'3.1',traffic:'31.2 ГБ',color:'orange'},
-  {name:'Семья · iPhone',ip:'10.8.0.03',protocol:'WG',traffic:'8.7 ГБ',color:'green'}
-];
-let clients = [...initialClients];
-const rows = document.getElementById('clientRows');
-const renderClients = (query='') => {
-  const filtered = clients.filter(c => `${c.name} ${c.ip}`.toLowerCase().includes(query.toLowerCase()));
-  rows.innerHTML = filtered.map((c, i) => `<div class="client-row"><div class="client-name"><div class="client-avatar ${c.color}">${c.name.split(' ').map(x=>x[0]).join('').slice(0,2)}</div><div><strong>${c.name}</strong><span>${c.ip}</span></div></div><div class="protocol"><b>${c.protocol}</b>${c.protocol === 'WG' ? 'WireGuard' : 'AmneziaWG'}</div><div class="traffic">${c.traffic}</div><div class="row-status"><i></i>Активен</div><button class="row-more">•••</button></div>`).join('') || `<div class="empty-row">Ничего не найдено</div>`;
-};
-renderClients();
-document.getElementById('searchInput').addEventListener('input', e => renderClients(e.target.value));
-const modal = document.getElementById('createModal');
-const openModal = () => { modal.classList.add('open'); modal.setAttribute('aria-hidden','false'); document.getElementById('clientCount').focus(); };
-const closeModal = () => { modal.classList.remove('open'); modal.setAttribute('aria-hidden','true'); };
-document.getElementById('openCreate').addEventListener('click', openModal);
-document.getElementById('closeModal').addEventListener('click', closeModal);
-document.getElementById('cancelCreate').addEventListener('click', closeModal);
-modal.addEventListener('click', e => { if(e.target === modal) closeModal(); });
-document.querySelectorAll('.protocol-card').forEach(card => card.addEventListener('click', () => { document.querySelectorAll('.protocol-card').forEach(c=>c.classList.remove('selected')); card.classList.add('selected'); }));
-const toast = document.getElementById('toast');
-document.getElementById('createForm').addEventListener('submit', e => {
-  e.preventDefault();
-  const count = Math.min(25, Math.max(1, Number(document.getElementById('clientCount').value) || 1));
-  const prefix = document.getElementById('namePrefix').value.trim() || 'User';
-  const protocol = document.querySelector('.protocol-card.selected').dataset.protocol;
-  const p = protocol === 'WireGuard' ? 'WG' : '3.1';
-  const base = clients.length + 13;
-  for(let i=0;i<count;i++) clients.unshift({name:`${prefix} ${String(base+i).padStart(2,'0')}`,ip:`10.8.0.${base+i}`,protocol:p,traffic:'0 Б',color:['violet','cyan','orange','green'][i%4]});
-  renderClients(); closeModal();
-  document.getElementById('toastText').textContent = `${count} ${count === 1 ? 'клиент добавлен' : 'клиента добавлено'} · ${protocol}`;
-  toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 4200);
-});
-document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('click', () => {
-  const section = el.dataset.section;
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.section === section));
-  const title = {overview:'Обзор',clients:'Клиенты',servers:'Серверы',imports:'Импорт',settings:'Настройки',docs:'Документация'}[section] || 'Обзор';
-  document.querySelector('.breadcrumb strong').textContent = title;
-  if(section === 'clients') document.querySelector('.clients-panel').scrollIntoView({behavior:'smooth', block:'center'});
-  if(section === 'docs') document.querySelector('.tip-row').scrollIntoView({behavior:'smooth', block:'center'});
-  if(section === 'imports') { document.getElementById('toastText').textContent = 'Импорт конфигураций скоро будет доступен.'; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 3500); }
-}));
-document.addEventListener('keydown', e => { if(e.key === 'Escape') closeModal(); if((e.ctrlKey||e.metaKey) && e.key.toLowerCase() === 'k'){e.preventDefault(); openModal();} });
-const loginScreen = document.getElementById('loginScreen');
-const appShell = document.getElementById('appShell');
-const loginForm = document.getElementById('loginForm');
-if (sessionStorage.getItem('amnezia-auth') === '1') { loginScreen.style.display = 'none'; appShell.style.display = 'flex'; }
-loginForm.addEventListener('submit', e => { e.preventDefault(); const user = document.getElementById('loginUser').value.trim(); const pass = document.getElementById('loginPass').value; if (user === 'admin' && pass === 'amnezia-demo') { sessionStorage.setItem('amnezia-auth','1'); loginScreen.style.display='none'; appShell.style.display='flex'; } else { document.getElementById('loginPass').style.borderColor='#e88b8b'; document.getElementById('loginPass').value=''; document.getElementById('loginPass').placeholder='Неверный пароль'; } });
-document.getElementById('togglePass').addEventListener('click', e => { const input=document.getElementById('loginPass'); input.type=input.type==='password'?'text':'password'; e.target.textContent=input.type==='password'?'Показать':'Скрыть'; });
-// Production API bridge. The static demo remains usable when opened from file://.
-if (location.protocol !== 'file:') {
-  const apiJson = (url, options={}) => fetch(url, {headers:{'Content-Type':'application/json'}, ...options}).then(async r => ({ok:r.ok, data:await r.json().catch(()=>({}))}));
-  document.addEventListener('submit', async event => {
-    if (event.target.id !== 'loginForm') return;
-    event.preventDefault(); event.stopImmediatePropagation();
-    const {ok} = await apiJson('/api/login', {method:'POST', body:JSON.stringify({username:document.getElementById('loginUser').value, password:document.getElementById('loginPass').value})});
-    if (ok) { loginScreen.style.display='none'; appShell.style.display='flex'; sessionStorage.setItem('amnezia-auth','1'); await loadProductionClients(); }
-    else { const p=document.getElementById('loginPass'); p.value=''; p.placeholder='Неверный логин или пароль'; p.style.borderColor='#e88b8b'; }
-  }, true);
-  document.addEventListener('submit', async event => {
-    if (event.target.id !== 'createForm') return;
-    event.preventDefault(); event.stopImmediatePropagation();
-    const selected=document.querySelector('.protocol-card.selected').dataset.protocol;
-    const {ok,data}=await apiJson('/api/clients',{method:'POST',body:JSON.stringify({name:document.getElementById('namePrefix').value,description:document.getElementById('description').value,protocol:selected==='WireGuard'?'wireguard':'amneziawg',version:selected==='WireGuard'?'wg':'3.1',traffic_limit:document.getElementById('trafficLimit').value,expires_at:document.getElementById('expiry').value})});
-    if(ok){ closeModal(); await loadProductionClients(); document.getElementById('toastText').textContent='Клиент создан на VPS'; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),3500); }
-  }, true);
-  async function loadProductionClients(){ const r=await fetch('/api/clients'); if(!r.ok)return; const payload=await r.json(); clients=payload.clients.map(c=>({name:c.name,ip:c.address,protocol:c.protocol==='wireguard'?'WG':c.version,traffic:c.traffic_limit||'Без лимита',color:'violet'})); renderClients(); }
-  fetch('/api/me').then(r=>r.json()).then(me=>{if(me.authenticated){loginScreen.style.display='none';appShell.style.display='flex';loadProductionClients();}}).catch(()=>{});
+'use strict';
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const en={overview:'Overview',clients:'Clients',profiles:'VPN servers',import:'Import',settings:'Settings',help:'Help',signIn:'Sign in',localPanel:'Manage VPN on this server',username:'Username',password:'Password',administrator:'Administrator',logout:'Sign out',refresh:'Refresh',createClient:'＋ Create client',online:'Online',usage:'Traffic used',all:'All statuses',enabled:'Allowed',disabled:'Disabled',name:'Name (30 characters max.)',protocol:'Protocol',expires:'Expires',status:'Status',actions:'Actions',noClients:'No clients. Create a VPN profile and your first client.',usageNote:'Traffic is cumulative since accounting started. Online: handshake in the last 3 minutes.',profileNote:'Each generation has its own interface and UDP port. Clients share the profile server key and parameters.',newProfile:'＋ VPN profile',profile:'VPN profile',importNote:'Keeping existing connections requires the original server keys. A client .conf can only be imported into a profile with matching server public key and obfuscation. AntiZapret migration requires a separate review of the original server backup.',language:'Language',currentPassword:'Current password',newPassword:'New password (10+ characters)',save:'Save',access:'Panel address',accessNote:'Change the domain and port using this VPS command. It validates Nginx and preserves the previous configuration:',backup:'Backup',backupNote:'The SQL backup contains private keys. Keep it in a secure location.',downloadBackup:'Download database',fullBackup:'Full backup of database, keys and configuration:',guide:'1. Create a VPN profile with an endpoint and a free UDP port. 2. Create clients. 3. Open a client and download .conf or scan the QR code in a compatible app.',relayNote:'Endpoints support IP:port and domain:port, including IDNs. A relay must forward UDP to the profile port. After a DNS change clients may need to reconnect: WireGuard does not guarantee continuous DNS refresh.',quotaNote:'The limit is cumulative RX + TX, not a monthly quota. Enforcement runs every 10 seconds. Extend expiry or increase quota to restore access. Reset clears the recorded usage.',versionsNote:'Generations: 1.0, 1.5, 2.0, 3.0, 3.1. No invented 2.1/2.5 versions. The installed engine validates parameters; a failed profile is not reported as created.',events:'Events',count:'Number of clients',description:'Description',quota:'Quota, GiB (0 = unlimited)',resetUsage:'Reset recorded traffic',download:'Download .conf',delete:'Delete',version:'Generation',subnet:'Subnet',advanced:'AmneziaWG parameters',autoParams:'Empty object = automatic parameters. Changing an existing profile requires reissuing client files.',confirmParams:'Change parameters and reissue client files',connected:'Connected',failed:'Connection failed',edit:'Open',unlimited:'Unlimited',never:'No expiry',expired:'Expired',quotaHit:'Quota reached',saved:'Saved',created:'Created',confirmDelete:'Delete this client and revoke VPN access?',noProfiles:'Create a VPN profile first',noEvents:'No events yet',disconnected:'Interface offline',noKey:'Private key unavailable',qrSecret:'This QR code contains a private key. Do not share it publicly.'};
+const ru={connected:'Подключено',failed:'Нет соединения',edit:'Открыть',unlimited:'Без лимита',never:'Бессрочно',expired:'Срок истёк',quotaHit:'Лимит исчерпан',saved:'Сохранено',created:'Создано',confirmDelete:'Удалить клиента и отозвать доступ к VPN?',noProfiles:'Сначала создайте VPN-профиль',noEvents:'Событий пока нет',disconnected:'Интерфейс не запущен',noKey:'Приватный ключ недоступен',qrSecret:'QR содержит приватный ключ. Не публикуйте его.'};
+const original={}; $$('[data-i18n]').forEach(el=>{original[el.dataset.i18n]=el.textContent;});
+let lang=localStorage.getItem('ac-language')||'ru', csrf='', me={}, data={clients:[],profiles:[],events:[],panel:{}}, page='overview', polling=false;
+const t=k=>lang==='en'?(en[k]||k):(ru[k]||original[k]||k);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function translate(){document.documentElement.lang=lang; $$('[data-i18n]').forEach(el=>el.textContent=t(el.dataset.i18n)); $('#loginLanguage').value=lang; $('#settingsForm [name=language]').value=lang; $('#pageTitle').textContent=t(page==='servers'?'profiles':page==='imports'?'import':page==='docs'?'help':page);}
+function toast(message){$('#toast').textContent=message;$('#toast').hidden=false;setTimeout(()=>$('#toast').hidden=true,4000);}
+function error(message){$('#errorBanner').textContent=message;$('#errorBanner').hidden=!message;}
+async function api(path,options={}){
+ const headers={'X-CSRF-Token':csrf,...options.headers}; if(options.body && !(options.body instanceof FormData))headers['Content-Type']='application/json';
+ const response=await fetch('/api/'+path,{...options,headers}); const payload=await response.json().catch(()=>({error:'Invalid server response'}));
+ if(!response.ok){if(response.status===401 && path!=='login'){showLogin();}throw Error(payload.error||response.statusText);}
+ if(payload.csrf)csrf=payload.csrf; return payload;
 }
+function showLogin(){$('#appShell').hidden=true;$('#loginScreen').hidden=false;}
+function showApp(){$('#loginScreen').hidden=true;$('#appShell').hidden=false;$('#accountName').textContent=me.user||'';}
+function bytes(value){value=Number(value)||0;let n=0;const units=['B','KiB','MiB','GiB','TiB'];while(value>=1024&&n<4){value/=1024;n++;}return value.toLocaleString(lang,{maximumFractionDigits:n?1:0})+' '+units[n];}
+function date(value){if(!value)return t('never');return new Date(Number(value)*1000).toLocaleString(lang,{dateStyle:'short',timeStyle:'short'});}
+function dtInput(value){if(!value)return '';const d=new Date(Number(value)*1000);return new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
+function choosePage(p){page=p;$$('#nav button').forEach(el=>el.classList.toggle('active',el.dataset.page===p));$('#overviewStats').hidden=p!=='overview';$('#clientsPage').hidden=!['overview','clients'].includes(p);['servers','imports','settings','docs'].forEach(n=>$('#'+n+'Page').hidden=p!==n);translate();}
+function render(){
+ $('#navCount').textContent=data.clients.length;$('#totalCount').textContent=data.clients.length;$('#onlineCount').textContent=data.clients.filter(c=>c.online&&c.enabled&&!c.blocked_reason).length;$('#totalUsage').textContent=bytes(data.clients.reduce((sum,c)=>sum+c.used_bytes,0));$('#profileCount').textContent=data.profiles.filter(p=>p.active).length+'/'+data.profiles.length;
+ $('#appVersion').textContent=data.version||'';$('#panelAddress').textContent=location.origin;
+ if(!$('#accessForm').contains(document.activeElement)){const af=$('#accessForm');af.ip.value=data.panel.ip||((/^\d+\.\d+\.\d+\.\d+$/.test(location.hostname))?location.hostname:'');af.domain.value=data.panel.domain||'';af.port.value=location.port||data.panel.port;}
+ const choices=data.profiles.map(p=>`<option value="${p.id}">${esc(p.name)} · ${p.protocol==='wireguard'?'WireGuard':p.version} / ${p.port}</option>`).join('');
+ $$('.profile-select').forEach(select=>{const previous=select.value;select.innerHTML=choices; if([...select.options].some(o=>o.value===previous))select.value=previous;});
+ $('#profileList').innerHTML=data.profiles.length?data.profiles.map(p=>`<article class="card profile-card"><span class="pill ${p.active?'':'off'}">${p.active?t('connected'):t('disconnected')}</span><h2>${esc(p.name)}</h2><p>${esc(p.protocol==='wireguard'?'WireGuard':'AmneziaWG '+p.version)} · ${esc(p.interface)}</p><p>${esc(p.endpoint)}<small>${esc(p.address)} · UDP ${p.port}</small></p><small>Public key: ${esc(p.public_key)}</small><pre>${esc(p.params==='{}'?'—':p.params)}</pre><button data-edit-profile="${p.id}">${t('edit')}</button></article>`).join(''):`<p class="empty">${t('noProfiles')}</p>`;
+ $('#events').innerHTML=data.events.length?data.events.map(e=>`<div class="event">${esc(eventText(e.message))}<small>${date(e.created_at)}</small></div>`).join(''):`<p>${t('noEvents')}</p>`;
+ renderClients(); translate();
+}
+function eventText(message){if(lang==='en')return message;const labels={'Client created: ':'Клиент создан: ','Client updated: ':'Клиент изменён: ','Client deleted: ':'Клиент удалён: ','Client imported: ':'Клиент импортирован: ','VPN profile created: ':'Профиль VPN создан: ','VPN profile updated: ':'Профиль VPN изменён: ','Panel settings updated':'Настройки панели сохранены','Panel installed':'Панель установлена','Existing VPN adopted; server keys preserved':'Существующий VPN принят; серверные ключи сохранены'};for(const [key,value] of Object.entries(labels))if(message.startsWith(key))return value+message.slice(key.length);return message;}
+function renderClients(){
+ const q=$('#search').value.toLowerCase(), filter=$('#statusFilter').value;
+ const clients=data.clients.filter(c=>(c.name+' '+c.address+' '+c.description).toLowerCase().includes(q)&&(filter==='all'||(filter==='enabled'?c.enabled&&!c.blocked_reason:!c.enabled||c.blocked_reason)));
+ $('#tableCount').textContent=clients.length+' / '+data.clients.length;$('#empty').hidden=clients.length>0;
+ $('#clientRows').innerHTML=clients.map(c=>{const status=c.blocked_reason==='expired'?t('expired'):c.blocked_reason==='quota'?t('quotaHit'):!c.enabled?t('disabled'):c.online?t('online'):t('enabled');
+ return `<tr><td><button class="client-name" data-client="${c.id}">${esc(c.name)}</button><small>${esc(c.address)}${c.description?' · '+esc(c.description):''}</small></td><td>${esc(c.protocol==='wireguard'?'WireGuard':'AWG '+c.version)}</td><td>${bytes(c.used_bytes)}<small>${c.quota_bytes?'/ '+bytes(c.quota_bytes):t('unlimited')}</small></td><td>${date(c.expires_at)}</td><td><span class="pill ${!c.enabled||c.blocked_reason?'off':''}">${status}</span></td><td><div class="row-actions"><button data-client="${c.id}">${t('edit')}</button>${c.downloadable?`<a class="button" href="/api/clients/${c.id}/config" download>.conf ↓</a><button data-qr="${c.id}">QR</button>`:`<small>${t('noKey')}</small>`}</div></td></tr>`;}).join('');
+}
+async function load(){if(polling)return;polling=true;try{data=await api('summary');showApp();error('');$('#connection').textContent=t('connected');render();}catch(e){error(e.message);$('#connection').textContent=t('failed');}finally{polling=false;}}
+$('#loginLanguage').onchange=e=>{lang=e.target.value;localStorage.setItem('ac-language',lang);translate();};
+$('#loginForm').onsubmit=async e=>{e.preventDefault();const form=new FormData(e.target);try{await api('login',{method:'POST',body:JSON.stringify(Object.fromEntries(form))});me=await api('me');$('#loginError').textContent='';e.target.password.value='';await load();}catch(err){$('#loginError').textContent=err.message;}};
+$('#logout').onclick=async()=>{try{await api('logout',{method:'POST'});}finally{showLogin();csrf='';me=await api('me');}};
+$('#nav').onclick=e=>{const b=e.target.closest('[data-page]');if(b)choosePage(b.dataset.page);};$('#refresh').onclick=load;
+$('#search').oninput=renderClients;$('#statusFilter').onchange=renderClients;
+$$('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
+function showClient(id){const form=$('#clientForm');form.reset();const c=data.clients.find(c=>c.id===id);$('#clientError').textContent='';$('#qrBox').hidden=true;$('#qrBox').replaceChildren();$('#clientCreation').hidden=!!c;$('#clientExisting').hidden=!c;$('#clientDialogTitle').textContent=c?c.name:t('createClient');form.elements.id.value=c?c.id:'';
+ if(c){for(const k of ['name','description','endpoint'])form.elements[k].value=c[k]||'';form.quota_gb.value=c.quota_bytes/1073741824;form.expires_at.value=dtInput(c.expires_at);form.enabled.checked=!!c.enabled;$('#downloadConfig').href='/api/clients/'+id+'/config';$('#downloadConfig').hidden=!c.downloadable;$('#showQr').hidden=!c.downloadable;$('#clientInfo').textContent='Public key: '+c.public_key+'\n'+date(c.created_at);}
+ $('#clientDialog').showModal();}
+$('#openCreate').onclick=()=>{if(!data.profiles.length){choosePage('servers');toast(t('noProfiles'));showProfile();}else showClient();};
+$('#clientRows').onclick=e=>{const open=e.target.closest('[data-client]'),qr=e.target.closest('[data-qr]');if(open)showClient(Number(open.dataset.client));if(qr){showClient(Number(qr.dataset.qr));showQR(Number(qr.dataset.qr));}};
+function showQR(id){$('#qrBox').hidden=false;$('#qrBox').innerHTML=`<img src="/api/clients/${id}/qr" alt="VPN QR"><p>${t('qrSecret')}</p>`;}
+$('#showQr').onclick=()=>showQR(Number($('#clientForm').elements.id.value));
+$('#clientForm').onsubmit=async e=>{e.preventDefault();const form=e.target,id=form.elements.id.value;const payload={name:form.elements.name.value,description:form.description.value,quota_bytes:Math.round(Number(form.quota_gb.value)*1073741824),expires_at:form.expires_at.value?Math.floor(new Date(form.expires_at.value).getTime()/1000):''};
+ if(id)Object.assign(payload,{endpoint:form.endpoint.value,enabled:form.enabled.checked,reset_usage:form.reset_usage.checked});else Object.assign(payload,{profile_id:Number(form.profile_id.value),count:Number(form.count.value)});
+ const button=form.querySelector('button.primary');button.disabled=true;
+ try{await api('clients'+(id?'/'+id:''),{method:id?'PATCH':'POST',body:JSON.stringify(payload)});$('#clientDialog').close();await load();toast(t('saved'));}catch(err){$('#clientError').textContent=err.message;}finally{button.disabled=false;}};
+$('#deleteClient').onclick=async()=>{if(!confirm(t('confirmDelete')))return;try{await api('clients/'+$('#clientForm').elements.id.value,{method:'DELETE'});$('#clientDialog').close();await load();}catch(e){$('#clientError').textContent=e.message;}};
+function showProfile(id){const form=$('#profileForm');form.reset();const p=data.profiles.find(p=>p.id===id);form.elements.id.value=p?p.id:'';$('#profileError').textContent='';$('#profileCreation').hidden=!!p;$('#profileNetwork').hidden=!!p;$('#confirmParams').hidden=!p;form.params.value=p?p.params:'{}';
+ if(p){form.elements.name.value=p.name;form.endpoint.value=p.endpoint;form.protocol.value=p.protocol;form.version.value=p.version;}else{let port=51820;while(data.profiles.some(p=>p.port===port))port++;form.port.value=port;form.subnet.placeholder=`10.77.${Math.max(0,...data.profiles.map(p=>p.id))+1}.0/24`;}
+ renderParameters(p?JSON.parse(p.params):{});$('#advanced').hidden=form.protocol.value==='wireguard';$('#profileDialog').showModal();}
+function renderParameters(current={}){const v=$('#profileForm').version.value;let names=['Jc','Jmin','Jmax','S1','S2','H1','H2','H3','H4'];if(v!=='1.0')names.push('I1','I2','I3','I4','I5');if(['2.0','3.0','3.1'].includes(v))names.push('S3','S4');if(['3.0','3.1'].includes(v))names.push('HeaderProtectionKey','ContentPaddingAddition');if(v==='3.1')names.push('RekeyAfterTime','RekeyTimeout','RejectAfterTime','KeepaliveTimeout','MaxHandshakeAttempts','RandomTrailers','DisableCookies');$('#parameterFields').innerHTML=names.map(k=>`<label>${k}<input data-param="${k}" value="${esc(current[k]||'')}" placeholder="${lang==='ru'?'Автоматически':'Automatic'}"></label>`).join('');}
+function readParameters(){return Object.fromEntries($$('#parameterFields [data-param]').filter(el=>el.value.trim()).map(el=>[el.dataset.param,el.value.trim()]));}
+$('#profileForm [name=version]').onchange=()=>renderParameters();
+$('#newProfile').onclick=()=>showProfile();$('#profileList').onclick=e=>{const b=e.target.closest('[data-edit-profile]');if(b)showProfile(Number(b.dataset.editProfile));};
+$('#profileForm [name=protocol]').onchange=e=>$('#advanced').hidden=e.target.value==='wireguard';
+$('#profileForm').onsubmit=async e=>{e.preventDefault();const form=e.target,id=form.elements.id.value;let payload={name:form.elements.name.value,endpoint:form.endpoint.value};try{
+ if(!id){Object.assign(payload,{protocol:form.protocol.value,version:form.version.value,port:Number(form.port.value)});if(form.subnet.value)payload.subnet=form.subnet.value;if(form.protocol.value==='amneziawg')payload.params=readParameters();}
+ else if(form.confirm_regenerate.checked){payload.params=readParameters();payload.confirm_regenerate=true;}
+ const button=form.querySelector('button.primary');button.disabled=true;try{await api('profiles'+(id?'/'+id:''),{method:id?'PATCH':'POST',body:JSON.stringify(payload)});$('#profileDialog').close();await load();toast(t('saved'));}finally{button.disabled=false;}
+ }catch(err){$('#profileError').textContent=err.message;}};
+$('#importForm').onsubmit=async e=>{e.preventDefault();try{await api('import',{method:'POST',body:new FormData(e.target)});e.target.reset();await load();toast(t('saved'));}catch(err){error(err.message);}};
+$('#settingsForm').onsubmit=async e=>{e.preventDefault();try{const payload=Object.fromEntries(new FormData(e.target));await api('settings',{method:'PATCH',body:JSON.stringify(payload)});lang=payload.language;localStorage.setItem('ac-language',lang);e.target.password.value='';e.target.current_password.value='';translate();await load();toast(t('saved'));}catch(err){error(err.message);}};
+translate();choosePage('overview');
+(async()=>{try{me=await api('me');if(!localStorage.getItem('ac-language')){lang=me.language||'ru';translate();}if(me.authenticated)await load();}catch(e){$('#loginError').textContent=e.message;}})();
+setInterval(()=>{if(!$('#appShell').hidden&&!document.querySelector('dialog[open]'))load();},15000);
+
+$('#accessForm').onsubmit=async e=>{e.preventDefault();if(!confirm(lang==='ru'?'Изменить адрес панели? Откройте новый TCP-порт в firewall.':'Change the panel address? Open the new TCP port in your firewall.'))return;try{const payload=Object.fromEntries(new FormData(e.target));const result=await api('panel-access',{method:'PATCH',body:JSON.stringify(payload)});toast(result.url);setTimeout(()=>location.href=result.url,2000);}catch(err){error(err.message);}};
+
+$('#mobileLogout').onclick=()=>$('#logout').click();
