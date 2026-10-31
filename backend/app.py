@@ -26,7 +26,7 @@ ROOT=Path(os.environ.get('AMNEZIA_CONTROL_ROOT',Path(__file__).resolve().parents
 DIST=ROOT/'dist'
 app=Flask(__name__,static_folder=None)
 app.secret_key=os.environ.get('AMNEZIA_CONTROL_SECRET') or secrets.token_hex(32)
-app.config.update(MAX_CONTENT_LENGTH=2*1024*1024,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Strict',PERMANENT_SESSION_LIFETIME=28800)
+app.config.update(MAX_CONTENT_LENGTH=9*1024*1024,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Strict',PERMANENT_SESSION_LIFETIME=28800)
 ATTEMPTS=defaultdict(list)
 
 @app.before_request
@@ -125,7 +125,7 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.2.2')
+                   version='0.3.0')
 
 @app.get('/api/clients')
 @auth
@@ -260,6 +260,36 @@ def import_client():
             (name,'Imported .conf',p['protocol'],p['version'],str(address.ip)+'/32',public,private,peer.get('PresharedKey',''),destination,int(time.time()),p['id'],stored))
         state.sync(con,p); state.audit(con,'Client imported: '+name)
     return jsonify(ok=True,id=cur.lastrowid),201
+
+def migration_plan(con):
+    import importer
+    files=importer.read_uploads(request.files.getlist('files'))
+    options={k:request.form.get(k,'') for k in ('mode','profile_id','server_file','endpoint')}
+    plan,profile,entries=importer.build_plan(con,files,options)
+    if options['mode']=='server':
+        options['server_file']=plan.get('server_file',options['server_file']); options['profile_id']=''
+    else: options['server_file']=''; options['endpoint']=''
+    digest=hashlib.sha256(json.dumps([files,options,plan,importer.fingerprint(con)],sort_keys=True).encode()).hexdigest()
+    token=hmac.new(str(app.secret_key).encode(),digest.encode(),hashlib.sha256).hexdigest()
+    return plan,profile,entries,token
+
+@app.post('/api/import/preview')
+@auth
+def import_preview():
+    with state.LOCK,state.connection() as con:
+        plan,_,_,token=migration_plan(con)
+    return jsonify(**plan,token=token)
+
+@app.post('/api/import/apply')
+@auth
+def import_apply():
+    import importer
+    with state.LOCK,state.connection() as con:
+        plan,profile,entries,token=migration_plan(con)
+        if not hmac.compare_digest(token,str(request.form.get('token',''))):
+            raise Problem('Files or VPN state changed. Run preview again before importing.',409)
+        result=importer.apply_plan(con,plan,profile,entries)
+    return jsonify(**result),201
 
 @app.patch('/api/settings')
 @auth

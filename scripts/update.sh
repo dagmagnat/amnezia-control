@@ -41,6 +41,7 @@ install -d -m 700 /etc/amnezia-control /etc/wireguard /etc/amnezia/amneziawg
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 export AMNEZIA_CONTROL_ROOT=$APP_DIR AMNEZIA_CONTROL_DATA=/var/lib/amnezia-control
 "$APP_DIR/.venv/bin/python" "$APP_DIR/backend/manage.py" migrate
+"$APP_DIR/.venv/bin/python" "$APP_DIR/backend/manage.py" web-limits
 install -m 644 "$APP_DIR/systemd/amnezia-control.service" /etc/systemd/system/amnezia-control.service
 install -m 644 "$APP_DIR/systemd/ac-awg@.service" /etc/systemd/system/ac-awg@.service
 systemctl daemon-reload

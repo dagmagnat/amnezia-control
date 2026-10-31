@@ -3,6 +3,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -21,7 +22,7 @@ def panel_address(domain, port, ip):
     text=f'''server {{
     listen {port};
     server_name {names};
-    client_max_body_size 2m;
+    client_max_body_size 9m;
     location / {{
         proxy_pass http://127.0.0.1:8090;
         proxy_set_header Host $http_host;
@@ -62,8 +63,24 @@ def provision(public_host):
             state.audit(con,'Default profile provisioned: '+protocol)
 
 
+def web_limits():
+    path=Path('/etc/nginx/sites-available/amnezia-control')
+    if not path.exists(): return
+    previous=path.read_text()
+    if re.search(r'\bclient_max_body_size\s+[^;]+;',previous):
+        text=re.sub(r'\bclient_max_body_size\s+[^;]+;', 'client_max_body_size 9m;', previous)
+    else:
+        text=re.sub(r'\bserver\s*\{', 'server {\n    client_max_body_size 9m;', previous)
+    if text==previous: return
+    atomic_text(path,text)
+    try: command('nginx','-t'); command('systemctl','reload','nginx')
+    except Problem:
+        atomic_text(path,previous)
+        raise
+
+
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument('action',choices=['init','migrate','reconcile','provision','panel','restore','password']); args=parser.parse_args()
+    parser=argparse.ArgumentParser(); parser.add_argument('action',choices=['init','migrate','reconcile','provision','panel','restore','password','web-limits']); args=parser.parse_args()
     state.initialize()
     if args.action=='init':
         cfg=json.load(sys.stdin)
@@ -78,6 +95,7 @@ def main():
             for p in con.execute('SELECT * FROM profiles').fetchall(): state.sync(con,dict(p))
     elif args.action=='provision': provision(host(json.load(sys.stdin)['host']))
     elif args.action=='panel': panel_address(**json.load(sys.stdin))
+    elif args.action=='web-limits': web_limits()
     elif args.action=='password':
         import getpass
         password=getpass.getpass('New password / Новый пароль: ')

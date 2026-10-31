@@ -177,7 +177,7 @@ def atomic_text(path, text):
 def interface_text(profile, peers, quick=True):
     lines = ['[Interface]', 'PrivateKey = '+profile['private_key'], 'ListenPort = '+str(profile['port'])]
     if quick:
-        lines += ['Address = '+profile['address'], 'MTU = 1380', 'SaveConfig = false']
+        lines += ['Address = '+profile['address'], 'MTU = '+str(profile.get('mtu',1380)), 'SaveConfig = false']
         for rule in firewall_rules(profile):
             args = ' '.join(rule)
             table = '-t nat ' if rule[0]=='POSTROUTING' else ''

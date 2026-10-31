@@ -42,6 +42,8 @@ def initialize():
         CREATE TABLE IF NOT EXISTS profiles(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,protocol TEXT NOT NULL,version TEXT NOT NULL,interface TEXT NOT NULL UNIQUE,address TEXT NOT NULL,port INTEGER NOT NULL UNIQUE,endpoint TEXT NOT NULL,private_key TEXT NOT NULL,public_key TEXT NOT NULL,params TEXT NOT NULL DEFAULT '{}');
         CREATE TABLE IF NOT EXISTS clients(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,description TEXT DEFAULT '',protocol TEXT NOT NULL,version TEXT NOT NULL,address TEXT NOT NULL UNIQUE,public_key TEXT NOT NULL,private_key TEXT NOT NULL,preshared_key TEXT DEFAULT '',endpoint TEXT DEFAULT '',traffic_limit TEXT DEFAULT '',expires_at TEXT DEFAULT '',enabled INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,config TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at INTEGER NOT NULL,message TEXT NOT NULL);''')
+        if 'mtu' not in {r['name'] for r in con.execute('PRAGMA table_info(profiles)')}:
+            con.execute('ALTER TABLE profiles ADD COLUMN mtu INTEGER NOT NULL DEFAULT 1380')
         cols = {r['name'] for r in con.execute('PRAGMA table_info(clients)')}
         extras = {'profile_id':'INTEGER','quota_bytes':'INTEGER NOT NULL DEFAULT 0','used_bytes':'INTEGER NOT NULL DEFAULT 0','last_rx':'INTEGER NOT NULL DEFAULT 0','last_tx':'INTEGER NOT NULL DEFAULT 0','handshake':'INTEGER NOT NULL DEFAULT 0','blocked_reason':"TEXT NOT NULL DEFAULT ''"}
         for key, decl in extras.items():
@@ -127,9 +129,23 @@ def client_config(row, profile):
     if row.get('config'):
         try: original_interface,original_peer=parse_config(row['config'])
         except Problem: pass
-    lines=['[Interface]','PrivateKey = '+row['private_key'],'Address = '+row['address'], 'DNS = '+original_interface.get('DNS','1.1.1.1'),'MTU = '+original_interface.get('MTU','1380')]
-    lines += [k+' = '+v for k,v in json.loads(profile['params']).items()]
+    fields={'PrivateKey':row['private_key'],'Address':original_interface.get('Address',row['address'])}
+    if original_interface:
+        fields.update({k:original_interface[k] for k in ('DNS','MTU') if k in original_interface})
+    else: fields.update(DNS='1.1.1.1',MTU=str(profile.get('mtu',1380)))
+    params=json.loads(profile['params'])
+    if original_interface:
+        if profile['protocol']=='wireguard':
+            # Only validated WG-compatible legacy AWG files reach this path.
+            params.update({k:original_interface[k] for k in PARAMS if k in original_interface})
+        for k in ('Jc','Jmin','Jmax','I1','I2','I3','I4','I5'):
+            params.pop(k,None)
+            if k in original_interface: params[k]=original_interface[k]
+    fields.update(params)
+    lines=['[Interface]']+[k+' = '+v for k,v in fields.items()]
     lines += ['', '[Peer]','PublicKey = '+profile['public_key']]
     if row['preshared_key']: lines += ['PresharedKey = '+row['preshared_key']]
-    lines += ['Endpoint = '+destination,'AllowedIPs = '+original_peer.get('AllowedIPs','0.0.0.0/0'),'PersistentKeepalive = '+original_peer.get('PersistentKeepalive','25')]
+    lines += ['Endpoint = '+destination,'AllowedIPs = '+original_peer.get('AllowedIPs','0.0.0.0/0')]
+    if not original_peer or 'PersistentKeepalive' in original_peer:
+        lines += ['PersistentKeepalive = '+original_peer.get('PersistentKeepalive','25')]
     return '\n'.join(lines)+'\n'
