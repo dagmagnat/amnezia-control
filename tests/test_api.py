@@ -158,4 +158,40 @@ class ImportSuccessTests(unittest.TestCase):
         exported=self.client.get('/api/clients/'+str(r.json['id'])+'/config').text
         self.assertIn(private,exported);self.assertIn('AllowedIPs = 1.1.1.1/32',exported);self.assertIn('DNS = 9.9.9.9',exported)
 
+
+class AutoClientTests(unittest.TestCase):
+    setUp=ApiTests.setUp
+    tearDown=ApiTests.tearDown
+    post=ApiTests.post
+    def test_legacy_is_not_reused_for_amnezia(self):
+        with state.connection() as con:
+            con.execute("UPDATE profiles SET version='legacy',params='{}',name='Existing VPN' WHERE id=?",(self.profile['id'],))
+        response=self.post('clients',{'protocol':'amneziawg','version':'3.1','count':2})
+        self.assertEqual(response.status_code,201,response.json)
+        self.assertNotEqual(response.json['profile_id'],self.profile['id'])
+        for ident in response.json['ids']:
+            text=self.client.get(f'/api/clients/{ident}/config').text
+            for field in ['HeaderProtectionKey =','ContentPaddingAddition =','RandomTrailers = on','S4 =']:self.assertIn(field,text)
+        with state.connection() as con:
+            self.assertEqual(con.execute('SELECT version FROM profiles WHERE id=?',(self.profile['id'],)).fetchone()['version'],'legacy')
+    def test_reuses_one_connection_for_generation_and_all_versions(self):
+        for version in ['1.0','1.5','2.0','3.0','3.1']:
+            first=self.post('clients',{'protocol':'amneziawg','version':version})
+            self.assertEqual(first.status_code,201,first.json)
+            second=self.post('clients',{'protocol':'amneziawg','version':version})
+            self.assertEqual(first.json['profile_id'],second.json['profile_id'])
+            text=self.client.get('/api/clients/'+str(first.json['ids'][0])+'/config').text
+            self.assertIn('Jc =',text)
+            if version in ('2.0','3.0','3.1'):self.assertIn('S3 =',text)
+        standard=self.post('clients',{'protocol':'wireguard'})
+        self.assertEqual(standard.status_code,201,standard.json)
+        self.assertNotIn('Jc =',self.client.get('/api/clients/'+str(standard.json['ids'][0])+'/config').text)
+    def test_engine_failure_has_no_protocol_fallback(self):
+        self.engine.fail=True
+        response=self.post('clients',{'protocol':'amneziawg','version':'2.0'})
+        self.assertEqual(response.status_code,503,response.json)
+        with state.connection() as con:self.assertEqual(con.execute('SELECT COUNT(*) FROM profiles').fetchone()[0],1)
+        self.assertEqual(self.client.get('/api/clients').json['clients'],[])
+
+
 if __name__=='__main__':unittest.main(verbosity=2)

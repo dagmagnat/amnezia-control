@@ -17,6 +17,7 @@ from werkzeug.exceptions import HTTPException
 from core import (Problem, GENERATIONS, PARAMS, command, keys, key, number, host,
                   endpoint, parameters, parse_config, binary, config_path, atomic_text, service)
 import state
+from provision import create_profile, ensure_profile, cleanup_profile, CLIENT_VERSIONS
 from password_hash import hash_password
 import hashlib
 import hmac
@@ -121,10 +122,10 @@ def summary():
             p=dict(row); _,error=state.ENGINE.stats(p)
             profiles.append({k:v for k,v in p.items() if k!='private_key'} | {'active':not bool(error)})
         events=[dict(r) for r in con.execute('SELECT * FROM events ORDER BY id DESC LIMIT 25')]
-        panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru')}
+        panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
-                   capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS},
-                   version='0.2.0')
+                   capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
+                   version='0.2.1')
 
 @app.get('/api/clients')
 @auth
@@ -134,37 +135,9 @@ def clients():
 @app.post('/api/profiles')
 @auth
 def add_profile():
-    data=body(); protocol=data.get('protocol'); version=data.get('version')
-    if protocol not in ('wireguard','amneziawg'): raise Problem('Unknown protocol')
-    if protocol=='wireguard': version='wg'
-    elif version not in GENERATIONS: raise Problem('Unknown AmneziaWG generation')
-    b='awg' if protocol=='amneziawg' else 'wg'
-    if not shutil.which(b): raise Problem(b+' is not installed',503)
-    params=parameters(version,data.get('params')) if b=='awg' else {}
-    destination=endpoint(data.get('endpoint',''))
     with state.LOCK,state.connection() as con:
-        n=con.execute('SELECT COALESCE(MAX(id),0)+1 n FROM profiles').fetchone()['n']
-        network=ipaddress.ip_network(data.get('subnet',f'10.77.{n}.0/24'))
-        if network.version!=4 or network.prefixlen!=24 or not network.is_private: raise Problem('Use a private IPv4 /24 subnet')
-        for row in con.execute('SELECT address FROM profiles'):
-            if network.overlaps(ipaddress.ip_interface(row['address']).network): raise Problem('Subnet overlaps another profile')
-        iface=f'ac{b}{n}'; port=number(data.get('port'),1024,65535)
-        if con.execute('SELECT 1 FROM profiles WHERE port=?',(port,)).fetchone(): raise Problem('UDP port already used')
-        if config_path({'interface':iface,'protocol':protocol}).exists(): raise Problem('Interface config already exists')
-        private,public=keys(b); name=str(data.get('name') or ('AmneziaWG '+version if b=='awg' else 'WireGuard')).strip()[:60]
-        cur=con.execute('INSERT INTO profiles(name,protocol,version,interface,address,port,endpoint,private_key,public_key,params) VALUES(?,?,?,?,?,?,?,?,?,?)',
-            (name,protocol,version,iface,str(next(network.hosts()))+'/24',port,destination,private,public,json.dumps(params)))
-        p=profile_by_id(con,cur.lastrowid)
-        try: state.sync(con,p)
-        except Problem:
-            try: command('systemctl','stop',service(p))
-            except Problem: pass
-            try: command('systemctl','disable',service(p))
-            except Problem: pass
-            config_path(p).unlink(missing_ok=True)
-            raise
-        state.audit(con,'VPN profile created: '+name)
-    return jsonify(ok=True,id=p['id']),201
+        profile=create_profile(con,body())
+    return jsonify(ok=True,id=profile['id']),201
 
 @app.patch('/api/profiles/<int:ident>')
 @auth
@@ -191,22 +164,30 @@ def add_clients():
     if len(name)>30: raise Problem('Name limit: 30 characters')
     quota=number(data.get('quota_bytes',0),0,10**16); expires=expiry(data.get('expires_at'))
     with state.LOCK,state.connection() as con:
-        p=profile_by_id(con,data.get('profile_id')); first=int(state.value(con,'next_client_number','1'))
-        network=ipaddress.ip_interface(p['address']).network
-        taken={str(ipaddress.ip_interface(r['address']).ip) for r in con.execute('SELECT address FROM clients')}
-        taken.add(str(ipaddress.ip_interface(p['address']).ip))
-        free=[str(ip)+'/32' for ip in network.hosts() if str(ip) not in taken]
-        if len(free)<count: raise Problem('Subnet is full')
-        ids=[]
-        for i in range(count):
-            cname=(name if count==1 else (name[:26]+f' {i+1:02d}')) if name else f'User {first+i:02d}'
-            private,public=keys(binary(p)); psk=key(command(binary(p),'genpsk'))
-            cur=con.execute('INSERT INTO clients(name,description,protocol,version,address,public_key,private_key,preshared_key,endpoint,traffic_limit,expires_at,enabled,created_at,config,profile_id,quota_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (cname,str(data.get('description',''))[:500],p['protocol'],p['version'],free[i],public,private,psk,'','',expires,1,int(time.time()),'',p['id'],quota))
-            ids.append(cur.lastrowid); state.audit(con,'Client created: '+cname)
-        state.put(con,'next_client_number',first+count)
-        state.sync(con,p)
-    return jsonify(ok=True,ids=ids),201
+        if data.get('protocol'):
+            p,created_profile=ensure_profile(con,data['protocol'],data.get('version','3.1'))
+        else:
+            p=profile_by_id(con,data.get('profile_id'));created_profile=False
+        try:
+            first=int(state.value(con,'next_client_number','1'))
+            network=ipaddress.ip_interface(p['address']).network
+            taken={str(ipaddress.ip_interface(r['address']).ip) for r in con.execute('SELECT address FROM clients')}
+            taken.add(str(ipaddress.ip_interface(p['address']).ip))
+            free=[str(ip)+'/32' for ip in network.hosts() if str(ip) not in taken]
+            if len(free)<count: raise Problem('Subnet is full')
+            ids=[]
+            for i in range(count):
+                cname=(name if count==1 else (name[:26]+f' {i+1:02d}')) if name else f'User {first+i:02d}'
+                private,public=keys(binary(p)); psk=key(command(binary(p),'genpsk'))
+                cur=con.execute('INSERT INTO clients(name,description,protocol,version,address,public_key,private_key,preshared_key,endpoint,traffic_limit,expires_at,enabled,created_at,config,profile_id,quota_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (cname,str(data.get('description',''))[:500],p['protocol'],p['version'],free[i],public,private,psk,'','',expires,1,int(time.time()),'',p['id'],quota))
+                ids.append(cur.lastrowid); state.audit(con,'Client created: '+cname)
+            state.put(con,'next_client_number',first+count)
+            state.sync(con,p)
+        except Exception:
+            if created_profile: cleanup_profile(p)
+            raise
+    return jsonify(ok=True,ids=ids,profile_id=p['id'],endpoint=p['endpoint'],protocol=p['protocol'],version=p['version'],udp_port=p['port']),201
 
 @app.patch('/api/clients/<int:ident>')
 @auth
@@ -285,6 +266,7 @@ def import_client():
 def settings():
     data=body()
     with state.connection() as con:
+        if 'vpn_host' in data: state.put(con,'vpn_host',host(data['vpn_host']))
         if 'language' in data:
             if data['language'] not in ('ru','en'): raise Problem('Unknown language')
             state.put(con,'language',data['language'])
