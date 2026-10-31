@@ -194,4 +194,16 @@ class AutoClientTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/clients').json['clients'],[])
 
 
+
+
+class TunnelParserTests(unittest.TestCase):
+    def test_generated_config_accepts_repeated_firewall_hooks(self):
+        from tunnel import read_network_settings
+        p={'private_key':'not-used-here','port':51821,'interface':'acawg2','address':'10.77.1.1/24','params':'{}'}
+        text=core.interface_text(p,[])
+        self.assertGreater(text.count('PostUp ='),1)
+        fields=read_network_settings(text)
+        self.assertEqual(fields,{'Address':'10.77.1.1/24','ListenPort':'51821','MTU':'1380'})
+        self.assertNotIn('PostUp',fields)
+
 if __name__=='__main__':unittest.main(verbosity=2)

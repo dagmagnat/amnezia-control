@@ -6,7 +6,7 @@ const original={}; $$('[data-i18n]').forEach(el=>{original[el.dataset.i18n]=el.t
 let lang=localStorage.getItem('ac-language')||'ru', csrf='', me={}, data={clients:[],profiles:[],events:[],panel:{}}, page='overview', polling=false;
 const t=k=>lang==='en'?(en[k]||k):(ru[k]||original[k]||k);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function translate(){document.documentElement.lang=lang; $$('[data-i18n]').forEach(el=>el.textContent=t(el.dataset.i18n)); $('#loginLanguage').value=lang; $('#settingsForm [name=language]').value=lang; $('#pageTitle').textContent=t(page==='servers'?'profiles':page==='imports'?'import':page==='docs'?'help':page);}
+function translate(){document.documentElement.lang=lang; $$('[data-i18n]').forEach(el=>el.textContent=t(el.dataset.i18n)); $('#loginLanguage').value=lang; $('#settingsForm [name=language]').value=lang; $('#pageTitle').textContent=t(page==='servers'?'profiles':page==='imports'?'import':page==='docs'?'help':page);$('#clientForm button.primary').textContent=$('#clientForm').elements.id.value?t('save'):t('createAction');}
 function toast(message){$('#toast').textContent=message;$('#toast').hidden=false;setTimeout(()=>$('#toast').hidden=true,4000);}
 function error(message){$('#errorBanner').textContent=message;$('#errorBanner').hidden=!message;}
 async function api(path,options={}){

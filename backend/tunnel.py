@@ -8,14 +8,24 @@ import sys
 from pathlib import Path
 from core import Problem, atomic_text, command, firewall_rules
 
+def read_network_settings(text):
+    # wg-quick files legitimately repeat PostUp/PostDown. They are never executed
+    # here: read only the scalar network fields needed by this managed service.
+    lines=['[Interface]']
+    for line in text.split('[Peer]')[0].splitlines():
+        if '=' in line and line.split('=',1)[0].strip() in ('Address','ListenPort','MTU'):
+            lines.append(line)
+    parser=configparser.ConfigParser(interpolation=None)
+    parser.optionxform=str
+    parser.read_string('\n'.join(lines))
+    return dict(parser['Interface'])
+
 
 def main():
     action,iface=sys.argv[1:]
     if action not in ('up','down') or not re.fullmatch(r'acawg[0-9]+',iface): raise Problem('Invalid managed interface')
     path=Path('/etc/amnezia/amneziawg')/(iface+'.conf')
-    text=path.read_text(); interface=text.split('[Peer]')[0]
-    parser=configparser.ConfigParser(interpolation=None);parser.optionxform=str;parser.read_string(interface)
-    fields=dict(parser['Interface']);address=str(ipaddress.ip_interface(fields['Address']))
+    fields=read_network_settings(path.read_text());address=str(ipaddress.ip_interface(fields['Address']))
     p={'interface':iface,'address':address,'port':int(fields['ListenPort'])}
     rules=firewall_rules(p)
     if action=='down':

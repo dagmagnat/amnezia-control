@@ -56,7 +56,7 @@ def initialize():
                 source = next((p for p in paths if p.exists()), None)
                 if source:
                     text=source.read_text(encoding='utf-8-sig'); section=text.split('[Peer]')[0]
-                    parser=configparser.ConfigParser(interpolation=None,inline_comment_prefixes=('#',)); parser.optionxform=str
+                    parser=configparser.ConfigParser(interpolation=None,inline_comment_prefixes=('#',),strict=False); parser.optionxform=str
                     parser.read_string(section); fields=dict(parser['Interface'])
                     private=fields['PrivateKey']; public=command(binary(dummy),'pubkey',input=private+'\n')
                     params={k:fields[k] for k in PARAMS if k in fields}
