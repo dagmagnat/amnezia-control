@@ -124,7 +124,7 @@ def status():
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
-def static(path):
+def spa(path):
     target = DIST / path
     if path and target.exists(): return send_from_directory(DIST, path)
     return send_from_directory(DIST, 'index.html')

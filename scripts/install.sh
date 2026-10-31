@@ -12,7 +12,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 if [[ $EUID -ne 0 ]]; then echo "Run as root: sudo ./scripts/install.sh"; exit 1; fi
-if [[ -f /etc/wireguard/wg0.conf || -f /etc/wireguard/awg0.conf || -f "$DATA_DIR/control.db" ]]; then
+if [[ -f /etc/wireguard/wg0.conf || -f /etc/wireguard/awg0.conf || -f /etc/amnezia/amneziawg/awg0.conf || -f "$DATA_DIR/control.db" ]]; then
   echo "Existing VPN configuration or database detected. Installation stopped to preserve keys and clients. Use backup and update instead."
   exit 1
 fi
@@ -21,12 +21,29 @@ read -r -p "Panel admin login [admin]: " ADMIN_USER; ADMIN_USER=${ADMIN_USER:-ad
 read -r -s -p "Panel admin password: " ADMIN_PASS; echo
 [[ ${#ADMIN_PASS} -ge 10 ]] || { echo "Password must contain at least 10 characters"; exit 1; }
 read -r -p "Public domain (empty = IP only): " PANEL_DOMAIN
+read -r -p "Panel port [8080]: " PANEL_PORT; PANEL_PORT=${PANEL_PORT:-8080}
+[[ "$PANEL_PORT" =~ ^[0-9]+$ ]] && ((PANEL_PORT >= 1 && PANEL_PORT <= 65535)) || { echo "Invalid panel port"; exit 2; }
 read -r -p "VPN engine (wireguard/amneziawg) [wireguard]: " VPN_ENGINE; VPN_ENGINE=${VPN_ENGINE:-wireguard}
+case "$VPN_ENGINE" in wireguard|amneziawg) ;; *) echo "Unknown VPN engine"; exit 2;; esac
 read -r -p "VPN public endpoint (IP or domain:port) [auto]: " VPN_ENDPOINT
 VPN_ENDPOINT=${VPN_ENDPOINT:-$(hostname -I | awk '{print $1}'):51820}
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-pip nginx sqlite3 curl ca-certificates unzip qrencode wireguard wireguard-tools git openssl
-if [[ "$VPN_ENGINE" == "amneziawg" ]] && command -v add-apt-repository >/dev/null 2>&1; then add-apt-repository -y ppa:amnezia/ppa || true; apt-get update || true; apt-get install -y amneziawg amneziawg-tools || true; fi
+DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-pip nginx sqlite3 curl ca-certificates unzip qrencode wireguard wireguard-tools git openssl iptables iproute2
+if [[ "$VPN_ENGINE" == "amneziawg" ]]; then
+  if ! command -v awg >/dev/null 2>&1 || ! command -v awg-quick >/dev/null 2>&1; then
+    . /etc/os-release
+    if [[ "$ID" != "ubuntu" ]]; then
+      echo "Automatic Amnezia PPA setup requires Ubuntu. Install official AmneziaWG packages for this OS before retrying."
+      exit 1
+    fi
+    apt-get install -y software-properties-common python3-launchpadlib gnupg2 "linux-headers-$(uname -r)"
+    add-apt-repository -y ppa:amnezia/ppa
+    apt-get update
+    apt-get install -y amneziawg
+  fi
+  command -v awg >/dev/null
+  command -v awg-quick >/dev/null
+fi
 if [[ ! -d "$APP_DIR/.git" ]]; then
   rm -rf "$APP_DIR"; mkdir -p "$(dirname "$APP_DIR")"
   if [[ -n "$SOURCE_DIR" ]]; then cp -a "$SOURCE_DIR/." "$APP_DIR/"; else git clone "$REPO_URL" "$APP_DIR"; fi
@@ -35,13 +52,15 @@ python3 -m venv "$APP_DIR/.venv"; "$APP_DIR/.venv/bin/pip" install --upgrade pip
 mkdir -p "$DATA_DIR" /etc/amnezia-control
 HASH=$(printf '%s' "$ADMIN_PASS" | "$APP_DIR/.venv/bin/python" "$APP_DIR/backend/password_hash.py")
 unset ADMIN_PASS
-VPN_BIN=wg; [[ "$VPN_ENGINE" == "amneziawg" ]] && command -v awg >/dev/null 2>&1 && VPN_BIN=awg
+VPN_BIN=wg; [[ "$VPN_ENGINE" == "amneziawg" ]] && VPN_BIN=awg
 VPN_PRIVATE=$(umask 077; "$VPN_BIN" genkey)
 VPN_PUBLIC=$(printf '%s\n' "$VPN_PRIVATE" | "$VPN_BIN" pubkey)
-mkdir -p /etc/wireguard
 VPN_INTERFACE=wg0; [[ "$VPN_ENGINE" == "amneziawg" ]] && VPN_INTERFACE=awg0
+VPN_CONFIG_DIR=/etc/wireguard
+[[ "$VPN_ENGINE" == "amneziawg" ]] && VPN_CONFIG_DIR=/etc/amnezia/amneziawg
+install -d -m 700 "$VPN_CONFIG_DIR"
 WAN_IFACE=$(ip route get 1.1.1.1 | awk '{print $5; exit}')
-cat > "/etc/wireguard/$VPN_INTERFACE.conf" <<WGCONF
+cat > "$VPN_CONFIG_DIR/$VPN_INTERFACE.conf" <<WGCONF
 [Interface]
 Address = 10.8.0.1/24
 ListenPort = 51820
@@ -50,11 +69,16 @@ SaveConfig = true
 PostUp = iptables -A FORWARD -i $VPN_INTERFACE -j ACCEPT; iptables -A FORWARD -o $VPN_INTERFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o $WAN_IFACE -j MASQUERADE
 PostDown = iptables -D FORWARD -i $VPN_INTERFACE -j ACCEPT; iptables -D FORWARD -o $VPN_INTERFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o $WAN_IFACE -j MASQUERADE
 WGCONF
-chmod 600 "/etc/wireguard/$VPN_INTERFACE.conf"
+chmod 600 "$VPN_CONFIG_DIR/$VPN_INTERFACE.conf"
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.d/99-amnezia-control.conf 2>/dev/null || echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-amnezia-control.conf
-QUICK_SERVICE=wg-quick; [[ "$VPN_ENGINE" == "amneziawg" ]] && command -v awg-quick >/dev/null 2>&1 && QUICK_SERVICE=awg-quick
-systemctl enable --now "$QUICK_SERVICE@$VPN_INTERFACE" || true
+QUICK_SERVICE=wg-quick; [[ "$VPN_ENGINE" == "amneziawg" ]] && QUICK_SERVICE=awg-quick
+if ! systemctl enable --now "$QUICK_SERVICE@$VPN_INTERFACE"; then
+  echo "VPN startup failed. Installation is incomplete. Check: journalctl -u $QUICK_SERVICE@$VPN_INTERFACE -n 60 --no-pager"
+  exit 1
+fi
+systemctl is-active --quiet "$QUICK_SERVICE@$VPN_INTERFACE"
+"$VPN_BIN" show "$VPN_INTERFACE" public-key >/dev/null
 cat > /etc/amnezia-control/panel.env <<EOF
 AMNEZIA_CONTROL_ROOT=$APP_DIR
 AMNEZIA_CONTROL_DATA=$DATA_DIR
@@ -74,10 +98,14 @@ PY
 cp "$APP_DIR/systemd/amnezia-control.service" /etc/systemd/system/amnezia-control.service
 sed -i '/\[Service\]/a EnvironmentFile=/etc/amnezia-control/panel.env' /etc/systemd/system/amnezia-control.service
 systemctl daemon-reload; systemctl enable --now amnezia-control
+PANEL_IP=$(hostname -I | awk '{print $1}')
 cat >/etc/nginx/sites-available/amnezia-control <<NGINX
-server { listen 80; server_name ${PANEL_DOMAIN:-_}; location / { proxy_pass http://127.0.0.1:8090; proxy_set_header Host \$host; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; } }
+server { listen $PANEL_PORT; server_name $PANEL_IP $PANEL_DOMAIN _; location / { proxy_pass http://127.0.0.1:8090; proxy_set_header Host \$host; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; } }
 NGINX
 ln -sfn /etc/nginx/sites-available/amnezia-control /etc/nginx/sites-enabled/amnezia-control
-nginx -t && systemctl reload nginx
+nginx -t
+systemctl reload nginx
+curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:8090/api/me >/dev/null
+systemctl is-active --quiet amnezia-control
 if [[ -n "$PANEL_DOMAIN" ]] && command -v certbot >/dev/null 2>&1; then echo "For HTTPS run: certbot --nginx -d $PANEL_DOMAIN"; fi
-echo "Amnezia Control installed. URL: ${PANEL_DOMAIN:-http://$(hostname -I | awk '{print $1}')}  user: $ADMIN_USER"
+echo "Amnezia Control installed. URL: http://${PANEL_DOMAIN:-$PANEL_IP}:$PANEL_PORT  IP: http://$PANEL_IP:$PANEL_PORT  user: $ADMIN_USER"
