@@ -104,3 +104,10 @@ html,body{width:100%;height:100%;overflow:hidden}
 .pill[class*=status-]{display:inline-flex;align-items:center;white-space:nowrap;line-height:1.5}.status-cell{white-space:nowrap}
 @media(max-width:760px){.overview-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;overflow:visible;padding:8px 8px 0}.overview-filters button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;min-height:43px;padding:5px 3px;font-size:11px}.overview-filters button span{max-width:100%;overflow:hidden;text-overflow:ellipsis}.overview-filters b{font-size:11px;line-height:1.3;margin:0;background:transparent;padding:0;font-weight:600}}
 .selection-bar #selectVisible[aria-pressed=true]{border-color:#997ac5;background:#b49aff15;color:#e0ceff}
+
+/* Keep both authenticated content and the sign-in form hidden until session check. */
+.startup-screen{height:100dvh;display:grid;place-items:center;background:radial-gradient(ellipse at 50% 40%,#28203c44,transparent 60%),var(--bg)}
+.startup-content{display:flex;flex-direction:column;align-items:center;gap:16px;padding:24px;max-width:430px;text-align:center}.startup-content p{margin:0;font-size:14px;color:var(--muted)}
+.startup-spinner{width:30px;height:30px;border:2px solid #b49aff24;border-top-color:var(--purple);border-radius:50%;animation:startup-spin .9s linear infinite}.startup-content .startup-error{font-size:13px;color:#e1acbb;overflow-wrap:anywhere}.startup-error:empty{display:none}.startup-content button{min-width:130px;background:#b49aff13;border-color:#75618d}
+@keyframes startup-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.startup-spinner{animation:none;border-color:#b49aff88}}
