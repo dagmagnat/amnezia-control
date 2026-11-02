@@ -84,7 +84,14 @@ def client_by_id(con, ident):
 def public_client(row):
     result={k:v for k,v in dict(row).items() if k not in ('private_key','preshared_key','config')}
     result['downloadable']=bool(row['private_key'])
-    result['online']=bool(row['handshake'] and time.time()-row['handshake']<180)
+    now=time.time()
+    if not row['enabled']: status='disabled'
+    elif row['blocked_reason']=='expired' or row['expires_at'] and int(row['expires_at'])<=now: status='expired'
+    elif row['blocked_reason']=='quota' or row['quota_bytes'] and row['used_bytes']>=row['quota_bytes']: status='quota'
+    elif row['handshake'] and 0<=now-row['handshake']<180: status='online'
+    else: status='offline'
+    result['status']=status
+    result['online']=status=='online'
     return result
 
 def expiry(value):
@@ -125,7 +132,7 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.3.2')
+                   version='0.4.0')
 
 @app.get('/api/clients')
 @auth
@@ -215,11 +222,15 @@ def edit_client(ident):
 @app.delete('/api/clients/<int:ident>')
 @auth
 def delete_client(ident):
-    with state.LOCK,state.connection() as con:
-        c=client_by_id(con,ident); p=profile_by_id(con,c['profile_id'])
-        con.execute('UPDATE clients SET enabled=0 WHERE id=?',(ident,)); state.sync(con,p)
-        con.execute('DELETE FROM clients WHERE id=?',(ident,)); state.audit(con,'Client deleted: '+c['name'])
-    return jsonify(ok=True)
+    from client_actions import delete_clients
+    return jsonify(**delete_clients([ident]))
+
+@app.post('/api/clients/bulk-delete')
+@auth
+def bulk_delete_clients():
+    from client_actions import delete_clients
+    data=body()
+    return jsonify(**delete_clients(data.get('ids') if isinstance(data,dict) else None))
 
 @app.get('/api/clients/<int:ident>/config')
 @auth
