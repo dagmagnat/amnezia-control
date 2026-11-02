@@ -111,3 +111,5 @@ html,body{width:100%;height:100%;overflow:hidden}
 .startup-spinner{width:30px;height:30px;border:2px solid #b49aff24;border-top-color:var(--purple);border-radius:50%;animation:startup-spin .9s linear infinite}.startup-content .startup-error{font-size:13px;color:#e1acbb;overflow-wrap:anywhere}.startup-error:empty{display:none}.startup-content button{min-width:130px;background:#b49aff13;border-color:#75618d}
 @keyframes startup-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.startup-spinner{animation:none;border-color:#b49aff88}}
+
+#versionError.success-text{color:#80e1b5}

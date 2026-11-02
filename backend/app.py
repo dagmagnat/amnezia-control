@@ -17,6 +17,7 @@ from werkzeug.exceptions import HTTPException
 from core import (Problem, GENERATIONS, PARAMS, command, keys, key, number, host,
                   endpoint, parameters, parse_config, binary, config_path, atomic_text, service)
 import state
+import versions
 from provision import create_profile, ensure_profile, cleanup_profile, CLIENT_VERSIONS
 from password_hash import hash_password
 import hashlib
@@ -123,7 +124,7 @@ def logout(): session.clear(); return jsonify(ok=True)
 @auth
 def summary():
     with state.connection() as con:
-        clients=[public_client(r) for r in con.execute('SELECT * FROM clients ORDER BY id')]
+        clients=[public_client(r) | {'versions':versions.options(con,r)} for r in con.execute('SELECT * FROM clients ORDER BY id')]
         profiles=[]
         for row in con.execute('SELECT * FROM profiles ORDER BY id'):
             p=dict(row); _,error=state.ENGINE.stats(p)
@@ -132,12 +133,12 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.4.1')
+                   version='0.5.0')
 
 @app.get('/api/clients')
 @auth
 def clients():
-    with state.connection() as con: return jsonify(clients=[public_client(r) for r in con.execute('SELECT * FROM clients ORDER BY id')])
+    with state.connection() as con: return jsonify(clients=[public_client(r) | {'versions':versions.options(con,r)} for r in con.execute('SELECT * FROM clients ORDER BY id')])
 
 @app.post('/api/profiles')
 @auth
@@ -178,7 +179,7 @@ def add_clients():
         try:
             first=int(state.value(con,'next_client_number','1'))
             network=ipaddress.ip_interface(p['address']).network
-            taken={str(ipaddress.ip_interface(r['address']).ip) for r in con.execute('SELECT address FROM clients')}
+            taken=state.taken_addresses(con)
             taken.add(str(ipaddress.ip_interface(p['address']).ip))
             free=[str(ip)+'/32' for ip in network.hosts() if str(ip) not in taken]
             if len(free)<count: raise Problem('Subnet is full')
@@ -216,7 +217,21 @@ def edit_client(ident):
         c['blocked_reason']='quota' if c['quota_bytes'] and c['used_bytes']>=c['quota_bytes'] else ('expired' if c['expires_at'] and int(c['expires_at'])<time.time() else '')
         names=['name','description','endpoint','enabled','quota_bytes','expires_at','used_bytes','blocked_reason']
         con.execute('UPDATE clients SET '+','.join(k+'=?' for k in names)+' WHERE id=?',tuple(c[k] for k in names)+(ident,))
-        state.sync(con,p); state.audit(con,'Client updated: '+c['name'])
+        profiles=state.client_profiles(con,ident)
+        # Metadata applies to every generation. Restore all interfaces if one fails.
+        previous=[]
+        with state.connection() as source:
+            previous=[(p,state.all_peers(source,p['id'])) for p in profiles]
+        try:
+            for p in profiles: state.sync(con,p)
+            state.audit(con,'Client updated: '+c['name']);con.commit()
+        except Exception:
+            con.rollback();failed=False
+            for p,peers in previous:
+                try: state.ENGINE.apply(p,peers)
+                except Exception: failed=True
+            if failed: raise Problem('Client update failed; VPN rollback needs attention',503)
+            raise
     return jsonify(ok=True)
 
 @app.delete('/api/clients/<int:ident>')
@@ -232,11 +247,34 @@ def bulk_delete_clients():
     data=body()
     return jsonify(**delete_clients(data.get('ids') if isinstance(data,dict) else None))
 
+@app.post('/api/clients/add-version')
+@auth
+def add_version(): return jsonify(**versions.add(body()))
+
+@app.get('/api/clients/version-bundle')
+@auth
+def version_bundle():
+    import zipfile
+    version=request.args.get('version')
+    if version not in GENERATIONS: raise Problem('Choose a supported AmneziaWG generation')
+    raw=request.args.get('ids','')
+    if not re.fullmatch(r'[0-9]+(?:,[0-9]+){0,999}',raw): raise Problem('Select client IDs')
+    with state.connection() as con:
+        rows=versions.selected(con,{'ids':[int(s) for s in raw.split(',')]});out=io.BytesIO()
+        with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as archive:
+            for c in rows:
+                choices=versions.options(con,c)
+                v=next((v for v in choices if v['protocol']=='amneziawg' and v['version']==version and v['downloadable']),None)
+                if not v: raise Problem('Requested generation is missing for a selected client',409)
+                safe=re.sub(r'[^\w .-]','_',c['name']).strip('. ') or 'client'
+                archive.writestr(str(c['id'])+'-'+safe+'-awg-'+version+'.conf',versions.configuration(con,c,v['id']))
+    return app.response_class(out.getvalue(),mimetype='application/zip',headers={'Content-Disposition':'attachment; filename="amneziawg-'+version+'.zip"'})
+
 @app.get('/api/clients/<int:ident>/config')
 @auth
 def config(ident):
     with state.connection() as con:
-        c=client_by_id(con,ident); text=state.client_config(c,profile_by_id(con,c['profile_id']))
+        c=client_by_id(con,ident); text=versions.configuration(con,c,number(request.args.get('variant',0),0,10**10))
     return app.response_class(text,mimetype='text/plain',headers={'Content-Disposition':f'attachment; filename="client-{ident}.conf"'})
 
 @app.get('/api/clients/<int:ident>/qr')
@@ -244,7 +282,7 @@ def config(ident):
 def qr(ident):
     import qrcode
     with state.connection() as con:
-        c=client_by_id(con,ident); text=state.client_config(c,profile_by_id(con,c['profile_id']))
+        c=client_by_id(con,ident); text=versions.configuration(con,c,number(request.args.get('variant',0),0,10**10))
     out=io.BytesIO(); qrcode.make(text).save(out,format='PNG')
     return app.response_class(out.getvalue(),mimetype='image/png')
 

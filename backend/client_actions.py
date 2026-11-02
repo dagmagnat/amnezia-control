@@ -16,7 +16,9 @@ def delete_clients(ids):
     with state.LOCK,state.connection() as con:
         rows=con.execute('SELECT * FROM clients WHERE id IN ('+marks+')',ids).fetchall()
         if len(rows)!=len(ids): raise Problem('Client list changed. Refresh it before deleting.',409)
+        if any(row['profile_id'] is None for row in rows): raise Problem('Client VPN profile is missing',409)
         originals=[];pids={row['profile_id'] for row in rows}
+        pids.update(r['profile_id'] for r in con.execute('SELECT profile_id FROM client_variants WHERE client_id IN ('+marks+')',ids))
         if None in pids: raise Problem('Client VPN profile is missing',409)
         for pid in sorted(pids):
             profile=con.execute('SELECT * FROM profiles WHERE id=?',(pid,)).fetchone()
@@ -34,6 +36,7 @@ def delete_clients(ids):
             # mistake them for unmanaged peers that must be preserved.
             con.execute('UPDATE clients SET enabled=0 WHERE id IN ('+marks+')',ids)
             for profile,_ in originals: state.sync(con,profile)
+            con.execute('DELETE FROM client_variants WHERE client_id IN ('+marks+')',ids)
             con.execute('DELETE FROM clients WHERE id IN ('+marks+')',ids)
             state.audit(con,'Clients deleted: '+str(len(ids))+'; backup: '+backup.name)
             con.commit()

@@ -150,6 +150,7 @@ def fingerprint(con):
     # Counters may change while the operator reviews a plan. Identity changes may not.
     records = [list(r) for r in con.execute('SELECT id,public_key,address,port,params FROM profiles ORDER BY id')]
     records += [list(r) for r in con.execute('SELECT id,profile_id,public_key,address,private_key,preshared_key,config FROM clients ORDER BY id')]
+    records += [list(r) for r in con.execute('SELECT id,client_id,profile_id,address FROM client_variants ORDER BY id')]
     return hashlib.sha256(json.dumps(records).encode()).hexdigest()
 
 
@@ -236,6 +237,7 @@ def build_plan(con, files, options):
         for index, peer in enumerate(known_peers, 1):
             public = peer['PublicKey']; item = supplied.pop(public, None)
             if item:
+                if peer['_name']: item['name'] = peer['_name'][:30]
                 if item['address'] != str(ipaddress.ip_network(peer['AllowedIPs'])) or item['preshared_key'] != peer.get('PresharedKey', ''):
                     errors.append('Client file conflicts with original server peer #' + str(index))
             else:
@@ -251,6 +253,8 @@ def build_plan(con, files, options):
     if not entries: errors.append('No matching clients found')
     seen = set()
     for item in entries:
+        if con.execute('SELECT 1 FROM client_variants WHERE address=?',(item['address'],)).fetchone():
+            errors.append('Client address conflicts with an additional VPN version')
         if item['address'] in seen: errors.append('Duplicate client address in upload')
         seen.add(item['address']); item['action'] = 'create'
         rows = [dict(r) for r in con.execute('SELECT * FROM clients WHERE (public_key=? AND profile_id=?) OR address=?', (item['public_key'],profile.get('id'),item['address']))]

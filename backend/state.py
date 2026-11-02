@@ -44,6 +44,11 @@ def initialize():
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at INTEGER NOT NULL,message TEXT NOT NULL);''')
         if 'mtu' not in {r['name'] for r in con.execute('PRAGMA table_info(profiles)')}:
             con.execute('ALTER TABLE profiles ADD COLUMN mtu INTEGER NOT NULL DEFAULT 1380')
+        con.execute('''CREATE TABLE IF NOT EXISTS client_variants(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,client_id INTEGER NOT NULL,profile_id INTEGER NOT NULL,
+            address TEXT NOT NULL UNIQUE,public_key TEXT NOT NULL,private_key TEXT NOT NULL,preshared_key TEXT NOT NULL,
+            last_rx INTEGER NOT NULL DEFAULT 0,last_tx INTEGER NOT NULL DEFAULT 0,
+            handshake INTEGER NOT NULL DEFAULT 0,UNIQUE(client_id,profile_id))''')
         cols = {r['name'] for r in con.execute('PRAGMA table_info(clients)')}
         extras = {'profile_id':'INTEGER','quota_bytes':'INTEGER NOT NULL DEFAULT 0','used_bytes':'INTEGER NOT NULL DEFAULT 0','last_rx':'INTEGER NOT NULL DEFAULT 0','last_tx':'INTEGER NOT NULL DEFAULT 0','handshake':'INTEGER NOT NULL DEFAULT 0','blocked_reason':"TEXT NOT NULL DEFAULT ''"}
         for key, decl in extras.items():
@@ -94,7 +99,22 @@ def initialize():
     if os.name != 'nt': os.chmod(DB,0o600); os.chmod(DATA,0o700)
 
 def all_peers(con, profile_id):
-    return [dict(r) for r in con.execute('SELECT * FROM clients WHERE profile_id=?',(profile_id,))]
+    peers = [dict(r) for r in con.execute('SELECT * FROM clients WHERE profile_id=?',(profile_id,))]
+    for r in con.execute('''SELECT c.*,v.address AS variant_address,v.public_key AS variant_public,v.preshared_key AS variant_psk FROM client_variants v
+                           JOIN clients c ON c.id=v.client_id WHERE v.profile_id=?''',(profile_id,)):
+        # Only runtime identity fields are replaced. Metadata and access stay on the parent.
+        peers.append(dict(r) | {'address':r['variant_address'],'public_key':r['variant_public'],'preshared_key':r['variant_psk'],'profile_id':profile_id})
+    return peers
+
+
+def client_profiles(con, ident):
+    return [dict(r) for r in con.execute('''SELECT * FROM profiles WHERE id IN (
+        SELECT profile_id FROM clients WHERE id=? UNION SELECT profile_id FROM client_variants WHERE client_id=?)''',(ident,ident))]
+
+
+def taken_addresses(con):
+    return {str(__import__('ipaddress').ip_interface(r[0]).ip) for r in con.execute(
+        'SELECT address FROM clients UNION SELECT address FROM client_variants UNION SELECT address FROM profiles')}
 
 def sync(con, profile):
     ENGINE.apply(dict(profile), all_peers(con,profile['id']))
@@ -102,25 +122,43 @@ def sync(con, profile):
 def refresh():
     with LOCK, connection() as con:
         now=int(time.time())
+        deltas={}; handshakes={}; changed=set()
+        previous={p['id']:(dict(p),all_peers(con,p['id'])) for p in con.execute('SELECT * FROM profiles')}
         for profile in con.execute('SELECT * FROM profiles').fetchall():
-            readings, error=ENGINE.stats(dict(profile)); changed=False
-            for row in con.execute('SELECT * FROM clients WHERE profile_id=?',(profile['id'],)).fetchall():
-                sample=readings.get(row['public_key']); used=row['used_bytes']; rx=row['last_rx']; tx=row['last_tx']; handshake=row['handshake']
+            readings, error=ENGINE.stats(dict(profile))
+            rows=[(dict(r),'clients',r['id'],r['id']) for r in con.execute('SELECT * FROM clients WHERE profile_id=?',(profile['id'],))]
+            rows += [(dict(r),'client_variants',r['variant_id'],r['client_id']) for r in con.execute('''SELECT v.*,v.id AS variant_id FROM client_variants v
+                       JOIN clients c ON c.id=v.client_id WHERE v.profile_id=?''',(profile['id'],))]
+            for row,table,ident,client_id in rows:
+                sample=readings.get(row['public_key']); used=0; rx=row['last_rx']; tx=row['last_tx']; handshake=row['handshake']
                 if sample:
                     used += sample['rx']-rx if sample['rx'] >= rx else sample['rx']
                     used += sample['tx']-tx if sample['tx'] >= tx else sample['tx']
                     rx=sample['rx']; tx=sample['tx']; handshake=sample.get('handshake',0)
                 elif not error:
                     rx=tx=0
-                reason=''
-                try:
-                    if row['expires_at'] and int(row['expires_at']) <= now: reason='expired'
-                except ValueError: pass
-                if row['quota_bytes'] and used >= row['quota_bytes']: reason='quota'
-                if reason != row['blocked_reason']: changed=True; audit(con,row['name']+': '+(reason or 'access resumed'))
-                con.execute('UPDATE clients SET used_bytes=?,last_rx=?,last_tx=?,handshake=?,blocked_reason=? WHERE id=?',(used,rx,tx,handshake,reason,row['id']))
-            if changed:
-                sync(con,profile)
+                deltas[client_id]=deltas.get(client_id,0)+used
+                handshakes[client_id]=max(handshakes.get(client_id,0),handshake)
+                con.execute('UPDATE '+table+' SET last_rx=?,last_tx=?,handshake=? WHERE id=?',(rx,tx,handshake,ident))
+        for row in con.execute('SELECT * FROM clients').fetchall():
+            used=row['used_bytes']+deltas.get(row['id'],0);reason=''
+            if row['expires_at'] and int(row['expires_at'])<=now: reason='expired'
+            if row['quota_bytes'] and used>=row['quota_bytes']: reason='quota'
+            if reason!=row['blocked_reason']:
+                changed.update(p['id'] for p in client_profiles(con,row['id']))
+                audit(con,row['name']+': '+(reason or 'access resumed'))
+            con.execute('UPDATE clients SET used_bytes=?,handshake=?,blocked_reason=? WHERE id=?',
+                        (used,handshakes.get(row['id'],row['handshake']),reason,row['id']))
+        try:
+            for pid in sorted(changed): sync(con,previous[pid][0])
+            con.commit()
+        except Exception:
+            con.rollback();failed=False
+            for pid in sorted(changed):
+                try: ENGINE.apply(*previous[pid])
+                except Exception: failed=True
+            if failed: raise Problem('Access reconciliation failed; VPN rollback needs attention',503)
+            raise
 
 def client_config(row, profile):
     if not row['private_key']: raise Problem('Private key not available; use the existing client file',409)

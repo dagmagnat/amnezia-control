@@ -67,7 +67,9 @@ def ensure_profile(con, protocol, version):
     version='wg' if protocol=='wireguard' else version
     if protocol=='amneziawg' and version not in CLIENT_VERSIONS: raise core.Problem('Choose a supported AmneziaWG generation')
     for row in con.execute('SELECT * FROM profiles WHERE protocol=? AND version=? ORDER BY id',(protocol,version)):
-        if usable(dict(row)): return dict(row),False
+        network=ipaddress.ip_interface(row['address']).network
+        taken=state.taken_addresses(con)
+        if usable(dict(row)) and any(str(ip) not in taken for ip in network.hosts()): return dict(row),False
     hostname=state.value(con,'vpn_host')
     if not hostname:
         existing=con.execute("SELECT endpoint FROM profiles WHERE endpoint != '' ORDER BY id LIMIT 1").fetchone()
