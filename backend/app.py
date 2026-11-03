@@ -133,7 +133,7 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.5.0')
+                   version='0.5.1')
 
 @app.get('/api/clients')
 @auth
@@ -205,7 +205,7 @@ def edit_client(ident):
         c=client_by_id(con,ident); p=profile_by_id(con,c['profile_id'])
         for name in ('name','description','endpoint'):
             if name in data: c[name]=str(data[name]).strip()
-        if not c['name'] or len(c['name'])>30: raise Problem('Name: 1–30 characters')
+        if not c['name'] or len(c['name'])>30: raise Problem('Name: 1вЂ“30 characters')
         if len(c['description'])>500: raise Problem('Description too long')
         if c['endpoint']: c['endpoint']=endpoint(c['endpoint'])
         if 'enabled' in data:
