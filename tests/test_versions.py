@@ -119,6 +119,27 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(again.json['created'],0);self.assertEqual(len(self.engine.calls),calls)
         self.assertEqual(original,[self.client.get(f'/api/clients/{i}/config?variant=0').text for i in ids])
 
+    def test_global_domain_updates_existing_overrides_and_versions_only_endpoint(self):
+        ids,_=self.prepare();ident=ids[0]
+        self.post('clients/add-version',{'ids':ids,'version':'3.1'})
+        with state.connection() as con:
+            con.execute('UPDATE clients SET endpoint=? WHERE id=?',('192.0.2.55:52080',ident))
+            profiles=[tuple(r) for r in con.execute('SELECT id,port,private_key,public_key,params,address FROM profiles ORDER BY id')]
+        before=core.parse_config(self.client.get(f'/api/clients/{ident}/config?variant=0').text)
+        calls=len(self.engine.calls)
+        result=self.client.patch('/api/settings',json={'vpn_host':'fin.amored.ru'},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(result.status_code,200,result.json)
+        after=core.parse_config(self.client.get(f'/api/clients/{ident}/config?variant=0').text)
+        self.assertEqual(after[1].pop('Endpoint'),'fin.amored.ru:52080');before[1].pop('Endpoint')
+        self.assertEqual(before,after);self.assertEqual(len(self.engine.calls),calls)
+        with state.connection() as con:
+            self.assertEqual(profiles,[tuple(r) for r in con.execute('SELECT id,port,private_key,public_key,params,address FROM profiles ORDER BY id')])
+            v=con.execute('SELECT id FROM client_variants WHERE client_id=?',(ident,)).fetchone()[0]
+        self.assertIn('Endpoint = fin.amored.ru:',self.client.get(f'/api/clients/{ident}/config?variant={v}').text)
+        result=self.client.patch('/api/settings',json={'vpn_host':'vpn.example.com','password':'new-password-long','current_password':'incorrect'},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(result.status_code,403)
+        self.assertIn('Endpoint = fin.amored.ru:52080',self.client.get(f'/api/clients/{ident}/config?variant=0').text)
+
     def test_adopted_client_without_private_key_gets_downloadable_variant(self):
         ident=self.post('clients',{'profile_id':self.profile['id']}).json['ids'][0]
         with state.connection() as con: con.execute("UPDATE clients SET private_key='' WHERE id=?",(ident,))

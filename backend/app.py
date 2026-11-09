@@ -133,7 +133,7 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.5.2')
+                   version='0.5.3')
 
 @app.get('/api/clients')
 @auth
@@ -351,8 +351,11 @@ def import_apply():
 @auth
 def settings():
     data=body()
-    with state.connection() as con:
-        if 'vpn_host' in data: state.put(con,'vpn_host',host(data['vpn_host']))
+    updated={}
+    with state.LOCK,state.connection() as con:
+        if 'vpn_host' in data:
+            from endpoints import change_host
+            updated=change_host(con,data['vpn_host'])
         if 'language' in data:
             if data['language'] not in ('ru','en'): raise Problem('Unknown language')
             state.put(con,'language',data['language'])
@@ -362,7 +365,7 @@ def settings():
             state.put(con,'admin_password',hash_password(data['password'])); revision=secrets.token_hex(16)
             state.put(con,'auth_revision',revision); session['revision']=revision
         state.audit(con,'Panel settings updated')
-    return jsonify(ok=True)
+    return jsonify(ok=True,endpoints_updated=updated)
 
 @app.get('/api/backup')
 @auth
