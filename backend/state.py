@@ -50,6 +50,8 @@ def initialize():
             last_rx INTEGER NOT NULL DEFAULT 0,last_tx INTEGER NOT NULL DEFAULT 0,
             handshake INTEGER NOT NULL DEFAULT 0,UNIQUE(client_id,profile_id))''')
         cols = {r['name'] for r in con.execute('PRAGMA table_info(clients)')}
+        if 'download_variant_id' not in cols:
+            con.execute('ALTER TABLE clients ADD COLUMN download_variant_id INTEGER NOT NULL DEFAULT 0')
         extras = {'profile_id':'INTEGER','quota_bytes':'INTEGER NOT NULL DEFAULT 0','used_bytes':'INTEGER NOT NULL DEFAULT 0','last_rx':'INTEGER NOT NULL DEFAULT 0','last_tx':'INTEGER NOT NULL DEFAULT 0','handshake':'INTEGER NOT NULL DEFAULT 0','blocked_reason':"TEXT NOT NULL DEFAULT ''"}
         for key, decl in extras.items():
             if key not in cols: con.execute('ALTER TABLE clients ADD COLUMN '+key+' '+decl)

@@ -45,11 +45,13 @@ def configuration(con, row, variant_id=0):
 
 def add(data):
     version=data.get('version')
+    primary=data.get('set_primary',False)
+    if type(primary) is not bool: raise core.Problem('set_primary must be boolean')
     if version not in core.GENERATIONS: raise core.Problem('Choose a supported AmneziaWG generation')
     with state.LOCK,state.connection() as con:
         rows=selected(con,data)
         pending=[row for row in rows if not existing(con,row,version)]
-        if not pending: return {'ok':True,'created':0,'skipped':len(rows)}
+        if not pending and not primary: return {'ok':True,'created':0,'skipped':len(rows)}
         folder=state.DATA/'version-backups';folder.mkdir(mode=0o700,parents=True,exist_ok=True)
         backup=folder/(time.strftime('%Y%m%d-%H%M%S')+'-'+secrets.token_hex(4)+'.db')
         fd=os.open(backup,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.close(fd)
@@ -71,6 +73,11 @@ def add(data):
                             (row['id'],p['id'],address,private,public,psk))
                 additions.setdefault(p['id'],[]).append(dict(row,address=address,public_key=public,preshared_key=psk,enabled=0))
             for p,_ in originals.values(): state.sync(con,p)
+            if primary:
+                for row in rows:
+                    choice=next((v for v in options(con,row) if v['protocol']=='amneziawg' and v['version']==version and v['downloadable']),None)
+                    if not choice: raise core.Problem('Requested generation is missing',409)
+                    con.execute('UPDATE clients SET download_variant_id=? WHERE id=?',(choice['id'],row['id']))
             state.audit(con,'Additional AmneziaWG '+version+': '+str(len(pending))+' clients; original connections preserved')
             con.commit()
         except Exception:

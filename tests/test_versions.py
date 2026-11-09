@@ -74,6 +74,28 @@ class VersionTests(unittest.TestCase):
         visitor=base.web.app.test_client()
         self.assertEqual(visitor.post('/api/clients/add-version',json={'ids':ids,'version':'3.1'}).status_code,403)
 
+    def test_save_preferred_generation_preserves_legacy_and_runtime(self):
+        ids,_=self.prepare(2);ident=ids[0]
+        original=self.client.get(f'/api/clients/{ident}/config?variant=0').text
+        self.post('clients/add-version',{'ids':ids,'version':'3.1'})
+        with state.connection() as con:
+            variant=con.execute('SELECT id FROM client_variants WHERE client_id=?',(ident,)).fetchone()[0]
+            other=con.execute('SELECT id FROM client_variants WHERE client_id=?',(ids[1],)).fetchone()[0]
+        calls=len(self.engine.calls)
+        url=f'/api/clients/{ident}'
+        saved=self.client.patch(url,json={'download_variant_id':variant},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(saved.status_code,200,saved.json)
+        self.assertEqual(len(self.engine.calls),calls)
+        row=self.client.get('/api/clients').json['clients'][0]
+        self.assertEqual(row['download_variant_id'],variant)
+        self.assertIn('HeaderProtectionKey =',self.client.get(url+'/config').text)
+        self.assertEqual(original,self.client.get(url+'/config?variant=0').text)
+        rejected=self.client.patch(url,json={'download_variant_id':other},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(rejected.status_code,404)
+        reset=self.client.patch(url,json={'download_variant_id':0},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(reset.status_code,200)
+        self.assertEqual(original,self.client.get(url+'/config').text)
+
     def test_full_subnet_allocates_second_profile(self):
         ids,_=self.prepare()
         with state.connection() as con:
@@ -85,6 +107,17 @@ class VersionTests(unittest.TestCase):
         with state.connection() as con:
             variant=con.execute('SELECT * FROM client_variants WHERE client_id=?',(ids[0],)).fetchone()
             self.assertNotEqual(variant['profile_id'],self.profile['id'])
+
+    def test_bulk_primary_preference_keeps_original_files(self):
+        ids,_=self.prepare(2)
+        original=[self.client.get(f'/api/clients/{i}/config?variant=0').text for i in ids]
+        result=self.post('clients/add-version',{'ids':ids,'version':'3.1','set_primary':True})
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertTrue(all(r['download_variant_id'] for r in self.client.get('/api/clients').json['clients']))
+        calls=len(self.engine.calls)
+        again=self.post('clients/add-version',{'ids':ids,'version':'3.1','set_primary':True})
+        self.assertEqual(again.json['created'],0);self.assertEqual(len(self.engine.calls),calls)
+        self.assertEqual(original,[self.client.get(f'/api/clients/{i}/config?variant=0').text for i in ids])
 
     def test_adopted_client_without_private_key_gets_downloadable_variant(self):
         ident=self.post('clients',{'profile_id':self.profile['id']}).json['ids'][0]

@@ -84,7 +84,7 @@ def client_by_id(con, ident):
 
 def public_client(row):
     result={k:v for k,v in dict(row).items() if k not in ('private_key','preshared_key','config')}
-    result['downloadable']=bool(row['private_key'])
+    result['downloadable']=bool(row['private_key'] or row['download_variant_id'])
     now=time.time()
     if not row['enabled']: status='disabled'
     elif row['blocked_reason']=='expired' or row['expires_at'] and int(row['expires_at'])<=now: status='expired'
@@ -133,7 +133,7 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.5.1')
+                   version='0.5.2')
 
 @app.get('/api/clients')
 @auth
@@ -203,9 +203,16 @@ def edit_client(ident):
     data=body()
     with state.LOCK,state.connection() as con:
         c=client_by_id(con,ident); p=profile_by_id(con,c['profile_id'])
+        original=dict(c)
+        if 'download_variant_id' in data:
+            variant=data['download_variant_id']
+            if type(variant) is not int or variant<0: raise Problem('Invalid client version')
+            if variant and not con.execute('SELECT 1 FROM client_variants WHERE id=? AND client_id=?',(variant,ident)).fetchone():
+                raise Problem('Client version not found',404)
+            c['download_variant_id']=variant
         for name in ('name','description','endpoint'):
             if name in data: c[name]=str(data[name]).strip()
-        if not c['name'] or len(c['name'])>30: raise Problem('Name: 1вЂ“30 characters')
+        if not c['name'] or len(c['name'])>30: raise Problem('Name: 1–30 characters')
         if len(c['description'])>500: raise Problem('Description too long')
         if c['endpoint']: c['endpoint']=endpoint(c['endpoint'])
         if 'enabled' in data:
@@ -215,9 +222,9 @@ def edit_client(ident):
         if 'expires_at' in data: c['expires_at']=expiry(data['expires_at'])
         if data.get('reset_usage'): c['used_bytes']=0
         c['blocked_reason']='quota' if c['quota_bytes'] and c['used_bytes']>=c['quota_bytes'] else ('expired' if c['expires_at'] and int(c['expires_at'])<time.time() else '')
-        names=['name','description','endpoint','enabled','quota_bytes','expires_at','used_bytes','blocked_reason']
+        names=['name','description','endpoint','enabled','quota_bytes','expires_at','used_bytes','blocked_reason','download_variant_id']
         con.execute('UPDATE clients SET '+','.join(k+'=?' for k in names)+' WHERE id=?',tuple(c[k] for k in names)+(ident,))
-        profiles=state.client_profiles(con,ident)
+        profiles=state.client_profiles(con,ident) if any(c[k]!=original[k] for k in ('enabled','blocked_reason')) else []
         # Metadata applies to every generation. Restore all interfaces if one fails.
         previous=[]
         with state.connection() as source:
@@ -274,7 +281,7 @@ def version_bundle():
 @auth
 def config(ident):
     with state.connection() as con:
-        c=client_by_id(con,ident); text=versions.configuration(con,c,number(request.args.get('variant',0),0,10**10))
+        c=client_by_id(con,ident); text=versions.configuration(con,c,number(request.args.get('variant',c['download_variant_id']),0,10**10))
     return app.response_class(text,mimetype='text/plain',headers={'Content-Disposition':f'attachment; filename="client-{ident}.conf"'})
 
 @app.get('/api/clients/<int:ident>/qr')
@@ -282,7 +289,7 @@ def config(ident):
 def qr(ident):
     import qrcode
     with state.connection() as con:
-        c=client_by_id(con,ident); text=versions.configuration(con,c,number(request.args.get('variant',0),0,10**10))
+        c=client_by_id(con,ident); text=versions.configuration(con,c,number(request.args.get('variant',c['download_variant_id']),0,10**10))
     out=io.BytesIO(); qrcode.make(text).save(out,format='PNG')
     return app.response_class(out.getvalue(),mimetype='image/png')
 
