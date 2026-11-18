@@ -27,7 +27,7 @@ async function api(path,options={}){
  if(!response.ok){if(response.status===401 && path!=='login'){showLogin();}const err=Error(payload.error||response.statusText);err.status=response.status;throw err;}
  if(payload.csrf)csrf=payload.csrf; return payload;
 }
-function showLogin(){$('#startupScreen').hidden=true;$('#appShell').hidden=true;$('#loginScreen').hidden=false;}
+function showLogin(){$('#appShell').hidden=true;window.location.replace('/');}
 function showApp(){$('#startupScreen').hidden=true;$('#loginScreen').hidden=true;$('#appShell').hidden=false;$('#accountName').textContent=me.user||'';$('#accountAvatar').textContent=Array.from(me.user||'?').slice(0,2).join('').toUpperCase();}
 function bytes(value){value=Number(value)||0;let n=0;const units=['B','KiB','MiB','GiB','TiB'];while(value>=1024&&n<4){value/=1024;n++;}return value.toLocaleString(lang,{maximumFractionDigits:n?1:0})+' '+units[n];}
 function date(value){if(!value)return t('never');return new Date(Number(value)*1000).toLocaleString(lang,{dateStyle:'short',timeStyle:'short'});}

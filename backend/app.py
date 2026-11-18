@@ -133,7 +133,7 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.6.2')
+                   version='0.6.3')
 
 @app.get('/api/traffic')
 @auth
@@ -416,7 +416,18 @@ def access_settings():
 @app.route('/<path:path>')
 def spa(path):
     if path.startswith('api/'): abort(404)
-    return send_from_directory(DIST,path or 'index.html')
+    # Public content is an explicit allowlist. Never expose panel source or backup
+    # files to a guest merely because they exist in the static directory.
+    public={'index.html','public.css','public.js','public-icon.svg'}
+    if path in public: return send_from_directory(DIST,path)
+    with state.connection() as con:
+        valid=bool(session.get('user') and session.get('revision','0')==state.value(con,'auth_revision','0'))
+    if not path: return send_from_directory(DIST,'panel.html' if valid else 'index.html')
+    if path=='favicon.ico' and not valid: return send_from_directory(DIST,'public-icon.svg')
+    if path in {'panel.html','app.js','styles.css','favicon.ico','favicon.svg'}:
+        if not valid: raise Problem('Please sign in',401)
+        return send_from_directory(DIST,path)
+    abort(404)
 
 def monitor():
     while True:

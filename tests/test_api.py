@@ -61,6 +61,42 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn('private_key',summary['profiles'][0])
         with self.client.get('/') as response: self.assertEqual(response.status_code,200)
         self.assertEqual(self.client.get('/api/missing').status_code,404)
+    def test_public_landing_and_private_panel_assets(self):
+        visitor=web.app.test_client()
+        for path in ['/', '/index.html', '/public.css', '/public.js', '/public-icon.svg', '/favicon.ico']:
+            with visitor.get(path) as response:
+                self.assertEqual(response.status_code,200,path)
+                text=response.get_data(as_text=True).lower()
+                for name in ['amnezia','wireguard','vpn','app.js','appshell']:
+                    self.assertNotIn(name,text,path)
+                self.assertEqual(response.headers['Cache-Control'],'no-store')
+        for path in ['/panel.html','/app.js','/styles.css','/favicon.svg']:
+            self.assertEqual(visitor.get(path).status_code,401,path)
+            with self.client.get(path) as response: self.assertEqual(response.status_code,200,path)
+        for path in ['/app.js.backup','/index.html.backup','/unknown.html','/../backend/app.py']:
+            self.assertEqual(visitor.get(path).status_code,404,path)
+        with self.client.get('/') as response: self.assertIn('appShell',response.text)
+        self.assertEqual(visitor.get('/api/summary').status_code,401)
+        self.assertEqual(visitor.get('/api/backup').status_code,401)
+
+    def test_public_login_rejects_bad_password_and_session_revocation(self):
+        visitor=web.app.test_client()
+        csrf=visitor.get('/api/me').json['csrf']
+        rejected=visitor.post('/api/login',json={'username':'test','password':'wrong'},headers={'X-CSRF-Token':csrf})
+        self.assertEqual(rejected.status_code,401)
+        self.assertFalse(visitor.get('/api/me').json['authenticated'])
+        with visitor.get('/') as response: self.assertIn('Atlas',response.text)
+        self.assertEqual(visitor.get('/panel.html').status_code,401)
+        valid=visitor.post('/api/login',json={'username':'test','password':'test-password-123'},headers={'X-CSRF-Token':csrf})
+        self.assertEqual(valid.status_code,200)
+        with visitor.get('/') as response: self.assertIn('appShell',response.text)
+        visitor.post('/api/logout',headers={'X-CSRF-Token':valid.json['csrf']})
+        with visitor.get('/') as response: self.assertIn('Atlas',response.text)
+        self.assertEqual(visitor.get('/app.js').status_code,401)
+        with state.connection() as con: state.put(con,'auth_revision','changed')
+        with self.client.get('/') as response: self.assertIn('Atlas',response.text)
+        self.assertEqual(self.client.get('/panel.html').status_code,401)
+
     def test_client_lifecycle_and_download(self):
         r=self.post('clients',{'profile_id':self.profile['id'],'count':2})
         self.assertEqual(r.status_code,201,r.json)
