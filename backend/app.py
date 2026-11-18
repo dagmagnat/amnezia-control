@@ -133,7 +133,27 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.5.3')
+                   version='0.6.2')
+
+@app.get('/api/traffic')
+@auth
+def traffic_report():
+    period=request.args.get('period','day')
+    if period not in ('day','week','month'): raise Problem('Invalid period',400)
+    ident=request.args.get('client_id')
+    if ident is not None:
+        if not re.fullmatch(r'[1-9][0-9]{0,9}',ident): raise Problem('Invalid client ID',400)
+        ident=int(ident)
+        with state.connection() as con: client_by_id(con,ident)
+    import traffic
+    try:
+        result=traffic.report(period,client_id=ident)
+        with state.connection() as con:
+            names={r['id']:r['name'] for r in con.execute('SELECT id,name FROM clients')}
+        result['clients']=[r | {'name':names[r['id']]} for r in result['clients'] if r['id'] in names]
+        return jsonify(result)
+    except Exception:
+        return jsonify(error='Traffic statistics unavailable; VPN is unaffected'),503
 
 @app.get('/api/clients')
 @auth
@@ -406,6 +426,11 @@ def monitor():
 
 def start():
     state.initialize()
+    try:
+        import traffic
+        traffic.initialize()
+    except Exception:
+        app.logger.warning('Traffic statistics unavailable; VPN is unaffected')
     threading.Thread(target=monitor,daemon=True).start()
     from waitress import serve
     serve(app,host='127.0.0.1',port=int(os.environ.get('PORT','8090')),threads=4)

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.db
+*.conf
+work/
+outputs/
+.openai/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.sql

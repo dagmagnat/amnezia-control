@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
+from client_defaults import OFFICIAL_I1
 from pathlib import Path
 from core import Problem, PARAMS, command, binary, config_path, Engine, atomic_text, parse_config
 
@@ -124,15 +125,20 @@ def sync(con, profile):
 def refresh():
     with LOCK, connection() as con:
         now=int(time.time())
-        deltas={}; handshakes={}; changed=set()
+        deltas={}; handshakes={}; changed=set(); observations=[]; partial=False
+        owners={r['id']:r for r in con.execute('SELECT id,enabled,blocked_reason FROM clients')}
         previous={p['id']:(dict(p),all_peers(con,p['id'])) for p in con.execute('SELECT * FROM profiles')}
         for profile in con.execute('SELECT * FROM profiles').fetchall():
             readings, error=ENGINE.stats(dict(profile))
+            partial |= bool(error)
             rows=[(dict(r),'clients',r['id'],r['id']) for r in con.execute('SELECT * FROM clients WHERE profile_id=?',(profile['id'],))]
             rows += [(dict(r),'client_variants',r['variant_id'],r['client_id']) for r in con.execute('''SELECT v.*,v.id AS variant_id FROM client_variants v
                        JOIN clients c ON c.id=v.client_id WHERE v.profile_id=?''',(profile['id'],))]
             for row,table,ident,client_id in rows:
                 sample=readings.get(row['public_key']); used=0; rx=row['last_rx']; tx=row['last_tx']; handshake=row['handshake']
+                if not error:
+                    owner=owners[client_id]
+                    observations.append(((profile['id'],row['public_key']),client_id,dict(sample or {'rx':0,'tx':0,'handshake':0}),bool(owner['enabled'] and not owner['blocked_reason'])))
                 if sample:
                     used += sample['rx']-rx if sample['rx'] >= rx else sample['rx']
                     used += sample['tx']-tx if sample['tx'] >= tx else sample['tx']
@@ -162,6 +168,13 @@ def refresh():
             if failed: raise Problem('Access reconciliation failed; VPN rollback needs attention',503)
             raise
 
+    # Isolated optional telemetry: no exception can affect quotas or VPN sync.
+    try:
+        import traffic
+        traffic.record(observations, now=now, partial=partial)
+    except Exception:
+        __import__('logging').getLogger(__name__).warning('Traffic history sample unavailable')
+
 def client_config(row, profile):
     if not row['private_key']: raise Problem('Private key not available; use the existing client file',409)
     destination=row['endpoint'] or profile['endpoint']
@@ -181,6 +194,9 @@ def client_config(row, profile):
         for k in ('Jc','Jmin','Jmax','I1','I2','I3','I4','I5'):
             params.pop(k,None)
             if k in original_interface: params[k]=original_interface[k]
+    elif profile['protocol']=='amneziawg' and profile['version']=='3.1':
+        # CPS is client-local. Exports/QR gain I1 without changing live VPN configs.
+        params.setdefault('I1',OFFICIAL_I1)
     fields.update(params)
     lines=['[Interface]']+[k+' = '+v for k,v in fields.items()]
     lines += ['', '[Peer]','PublicKey = '+profile['public_key']]
