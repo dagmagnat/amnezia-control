@@ -133,7 +133,7 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.6.3')
+                   version='0.6.4')
 
 @app.get('/api/traffic')
 @auth
@@ -273,6 +273,12 @@ def bulk_delete_clients():
     from client_actions import delete_clients
     data=body()
     return jsonify(**delete_clients(data.get('ids') if isinstance(data,dict) else None))
+
+@app.post('/api/clients/bulk-update')
+@auth
+def bulk_update_clients():
+    from client_actions import update_clients
+    return jsonify(**update_clients(body()))
 
 @app.post('/api/clients/add-version')
 @auth
