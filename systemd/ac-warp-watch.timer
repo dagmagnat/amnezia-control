@@ -1,0 +1,10 @@
+[Unit]
+Description=Monitor optional WARP egress without changing VPN tunnels
+
+[Timer]
+OnBootSec=10
+OnUnitInactiveSec=20
+Unit=ac-warp-watch.service
+
+[Install]
+WantedBy=timers.target

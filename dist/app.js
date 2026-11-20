@@ -40,7 +40,7 @@ function render(){
  if(!$('#settingsForm').contains(document.activeElement))$('#settingsForm').vpn_host.value=data.panel.vpn_host||'';
  const choices=data.profiles.map(p=>`<option value="${p.id}">${esc(p.name)} · ${p.protocol==='wireguard'?'WireGuard':p.version} / ${p.port}</option>`).join('');
  $$('.profile-select').forEach(select=>{const previous=select.value;if(document.activeElement===select)return;select.innerHTML=choices; if([...select.options].some(o=>o.value===previous))select.value=previous;});
- $('#profileList').innerHTML=data.profiles.length?data.profiles.map(p=>`<article class="card profile-card"><span class="pill ${p.active?'':'off'}">${p.active?t('connected'):t('disconnected')}</span><h2>${esc(p.version==='legacy'?'WireGuard / '+(lang==='ru'?'совместимость':'compatibility'):p.name)}</h2>${p.version==='legacy'?`<p class="legacy-note">${t('legacyNote')}</p>`:''}<p>${esc(p.endpoint)}</p><small>${t('portNote')} <strong>${p.port}/UDP</strong></small><details><summary>${t('advancedSettings')}</summary><small>${esc(p.interface)} · ${esc(p.address)}</small><small>Public key: ${esc(p.public_key)}</small><pre>${esc(p.params==='{}'?'—':JSON.stringify(JSON.parse(p.params),null,2))}</pre><button data-edit-profile="${p.id}">${t('edit')}</button></details></article>`).join(''):`<p class="empty">${t('noProfiles')}</p>`;
+ $('#profileList').innerHTML=data.profiles.length?data.profiles.map(p=>`<article class="card profile-card"><span class="pill ${p.active?'':'off'}">${p.active?t('connected'):t('disconnected')}</span><h2>${esc(p.version==='legacy'?'WireGuard / '+(lang==='ru'?'совместимость':'compatibility'):p.name)}</h2>${p.version==='legacy'?`<p class="legacy-note">${t('legacyNote')}</p>`:''}<p>${esc(p.endpoint)}</p><small>${t('portNote')} <strong>${p.port}/UDP</strong></small><details><summary>${t('advancedSettings')}</summary><small>${esc(p.interface)} · ${esc(p.address)}</small><small>Public key: ${esc(p.public_key)}</small><pre>${esc(p.params==='{}'?'—':JSON.stringify(JSON.parse(p.params),null,2))}</pre><button data-edit-profile="${p.id}">${t('edit')}</button> <button type="button" data-check-endpoint="${p.id}">${t('endpointCheck')}</button></details></article>`).join(''):`<p class="empty">${t('noProfiles')}</p>`;
  $('#events').innerHTML=data.events.length?data.events.map(e=>`<div class="event">${esc(eventText(e.message))}<small>${date(e.created_at)}</small></div>`).join(''):`<p>${t('noEvents')}</p>`;
  renderClients(); translate();if(page==='statistics')loadTraffic();
 }
@@ -106,7 +106,27 @@ function showProfile(id){const form=$('#profileForm');form.reset();const p=data.
 function renderParameters(current={}){const v=$('#profileForm').version.value;let names=['Jc','Jmin','Jmax','S1','S2','H1','H2','H3','H4'];if(v!=='1.0')names.push('I1','I2','I3','I4','I5');if(['2.0','3.0','3.1'].includes(v))names.push('S3','S4');if(['3.0','3.1'].includes(v))names.push('HeaderProtectionKey','ContentPaddingAddition');if(v==='3.1')names.push('RekeyAfterTime','RekeyTimeout','RejectAfterTime','KeepaliveTimeout','MaxHandshakeAttempts','RandomTrailers','DisableCookies');$('#parameterFields').innerHTML=names.map(k=>`<label>${k}<input data-param="${k}" value="${esc(current[k]||'')}" placeholder="${lang==='ru'?'Автоматически':'Automatic'}"></label>`).join('');}
 function readParameters(){return Object.fromEntries($$('#parameterFields [data-param]').filter(el=>el.value.trim()).map(el=>[el.dataset.param,el.value.trim()]));}
 $('#profileForm [name=version]').onchange=()=>renderParameters();
-$('#newProfile').onclick=()=>showProfile();$('#profileList').onclick=e=>{const b=e.target.closest('[data-edit-profile]');if(b)showProfile(Number(b.dataset.editProfile));};
+$('#newProfile').onclick=()=>showProfile();
+$('#profileList').onclick=event=>{
+ const edit=event.target.closest('[data-edit-profile]');
+ const check=event.target.closest('[data-check-endpoint]');
+ if(edit)showProfile(Number(edit.dataset.editProfile));
+ if(check)showEndpointCheck(Number(check.dataset.checkEndpoint));
+};
+async function showEndpointCheck(id){
+ const dialog=$('#endpointCheckDialog'),result=$('#endpointCheckResult');
+ result.textContent=t('endpointChecking');
+ dialog.showModal();
+ try{
+  const report=await api('profiles/'+id+'/endpoint-check');
+  const resolution=report.addresses.length?report.addresses.join(', '):t('endpointDnsUnavailable');
+  const location=report.local_matches===null?'':report.local_matches.length?
+    t('endpointLocal')+' '+report.local_matches.join(', '):t('endpointOther');
+  const port=report.listen_port===report.advertised_port?
+    t('endpointListening')+' '+report.listen_port+'/UDP':t('endpointListenMismatch')+' '+(report.listen_port||'—');
+  result.textContent=[report.endpoint,'DNS → '+resolution,location,port,t('endpointScopeNote')].filter(Boolean).join('\n');
+ }catch(err){result.textContent=err.message;}
+}
 $('#profileForm [name=protocol]').onchange=e=>$('#advanced').hidden=e.target.value==='wireguard';
 $('#profileForm').onsubmit=async e=>{e.preventDefault();const form=e.target,id=form.elements.id.value;let payload={name:form.elements.name.value,endpoint:form.endpoint.value};try{
  if(!id){Object.assign(payload,{protocol:form.protocol.value,version:form.version.value,port:Number(form.port.value)});if(form.subnet.value)payload.subnet=form.subnet.value;if(form.protocol.value==='amneziawg')payload.params=readParameters();}
@@ -215,10 +235,13 @@ async function loadTraffic(){
  const chartPoints=points.map(p=>({...p,up:p.upload/p.seconds,down:p.download/p.seconds})),end=Date.now()/1000;
  historyChart('#trafficChart',chartPoints,['up','down'],r.since||end-86400,end,200);if(!client)historyChart('#activityChart',points,['online_max'],r.since||end-86400,end,90);
  $('#trafficChartDates').innerHTML=`<span>${esc(date(r.since||r.started_at))}</span><span>${esc(date(end))}</span>`;
- $('#trafficClients').innerHTML=clients.length?clients.sort((a,b)=>(b.upload_bps+b.download_bps)-(a.upload_bps+a.download_bps)).map(c=>`<tr><td><button type="button" class="traffic-client-action" data-traffic-client="${c.id}">${esc(c.name)}</button><small>${stale?'—':c.online?t('online'):t('offline')}</small><small>${t('totalOnline')}: ${duration(c.total_online_seconds)}</small></td><td data-label="${esc(t('currentSpeed'))}">${stale?'—':speedPair(c.upload_bps,c.download_bps)}</td><td data-label="${esc(t('sessionAverage'))}">${stale||!c.online?'—':speedPair(c.average_upload_bps,c.average_download_bps)}</td><td data-label="${esc(t('recordSpeed'))}">${speedPair(c.peak_upload_bps,c.peak_download_bps)}</td></tr>`).join(''):`<tr><td colspan="4">${esc(t('waitingTraffic'))}</td></tr>`;
+ const onlineOnly=$('#trafficOnlineOnly').checked;
+ const shown=onlineOnly?clients.filter(c=>!stale&&c.online):clients;
+ $('#trafficClients').innerHTML=shown.length?shown.sort((a,b)=>(b.upload_bps+b.download_bps)-(a.upload_bps+a.download_bps)).map(c=>`<tr><td><button type="button" class="traffic-client-action" data-traffic-client="${c.id}">${esc(c.name)}</button><small>${stale?'—':c.online?t('online'):t('offline')}</small><small>${t('totalOnline')}: ${duration(c.total_online_seconds)}</small></td><td data-label="${esc(t('currentSpeed'))}">${stale?'—':speedPair(c.upload_bps,c.download_bps)}</td><td data-label="${esc(t('sessionAverage'))}">${stale||!c.online?'—':speedPair(c.average_upload_bps,c.average_download_bps)}</td><td data-label="${esc(t('recordSpeed'))}">${speedPair(c.peak_upload_bps,c.peak_download_bps)}</td></tr>`).join(''):`<tr><td colspan="4">${esc(t(onlineOnly&&!stale?'noOnline':'waitingTraffic'))}</td></tr>`;
  }catch(e){$('#trafficError').textContent=e.message;}finally{trafficPending=false;if((period!==$('#trafficPeriod').value||client!==$('#trafficClient').value)&&page==='statistics')loadTraffic();}
 }
 $('#trafficPeriod').onchange=()=>{trafficSequence++;loadTraffic();};
+$('#trafficOnlineOnly').onchange=()=>loadTraffic();
 
 Object.assign(ru,{allTraffic:'Все клиенты',currentSession:'Текущая сессия',totalOnline:'Всего онлайн',averageSession:'Средняя сессия',observedSessions:'Наблюдаемые сессии',trafficNote:'Данные хранятся 35 дней. Скорости — средние за интервал около 10 секунд. Онлайн и сессии оцениваются по handshake за последние 3 минуты. Время учитывается только при работающем сборщике; после перезапуска начинается новый сегмент сессии. Индивидуальная история и общее время собираются с версии 0.6.1. Пробелы на графике — отсутствие измерений.'});
 Object.assign(en,{allTraffic:'All clients',currentSession:'Current session',totalOnline:'Total online',averageSession:'Average session',observedSessions:'Observed sessions',trafficNote:'Data is retained for 35 days. Speeds are measured averages over about 10 seconds. Online state and sessions are estimated from handshakes within 3 minutes. Only observed time is counted; a panel restart starts a new session segment. Individual history and total time start with version 0.6.1. Chart gaps mean missing measurements.'});
@@ -247,3 +270,175 @@ $('#bulkActionForm').onsubmit=async e=>{e.preventDefault();if(bulkBusy)return;co
  try{const result=await api('clients/bulk-update',{method:'POST',body:JSON.stringify(payload)});selectedIds.clear();$('#bulkActionDialog').close();await load();toast(t('bulkUpdated')+': '+result.updated+(result.unchanged?' · '+t('bulkUnchanged')+': '+result.unchanged:'')+(result.restricted?' · '+t('bulkRestricted')+': '+result.restricted:''));}
  catch(err){$('#bulkActionError').textContent=err.message;}
  finally{bulkBusy=false;button.disabled=false;button.textContent=t('bulkApply');$$('#bulkActionDialog [data-close]').forEach(b=>b.disabled=false);$('#bulkActionChoice').disabled=false;}};
+
+// Optional outbound WARP is independent of local VPN identities.
+Object.assign(ru,{settingsWarp:'WARP',warpIntro:'Выход VPN-клиентов в интернет через Cloudflare. Подключение устройств к вашему серверу остаётся прежним.',warpClients:'VPN-клиенты',warpInternet:'Интернет',warpInstall:'Установить WARP',warpAcceptTerms:'Принимаю условия Cloudflare для регистрации этого WARP-клиента.',warpReadTerms:'Прочитать условия',warpRegister:'Зарегистрировать WARP',warpEnable:'Использовать WARP',warpEnableNote:'SSH и панель продолжат использовать обычный маршрут.',warpScope:'Какие подключения',warpSelected:'Выбранные VPN-подключения',warpAll:'Все, включая новые',warpProtocol:'Протокол до Cloudflare',warpAdvanced:'Дополнительно: DNS для WARP',warpDns:'До двух DNS IPv4 через запятую',warpDnsNote:'Пустое поле — текущие upstream DNS сервера. Настройки DNS самого сервера и клиентские конфиги не меняются.',warpPolicy:'При потере WARP выбранный трафик блокируется. Чтобы вернуть прямой выход, выключите WARP и сохраните. Уже открытые соединения могут потребовать переподключения.',warpDocs:'Официальная документация Cloudflare ↗',warpNotInstalled:'Не установлен',warpUnregistered:'Нужна регистрация',warpOff:'Выключен',warpOnline:'Подключён',warpBlocked:'Нет выхода WARP',warpBusy:'Операция выполняется…',warpReady:'Операция завершена.',warpInstallNote:'Установка официального клиента может занять несколько минут. Автоматически WARP не включается.',warpSelectionRequired:'Выберите хотя бы одно VPN-подключение.',warpTermsRequired:'Перед регистрацией примите условия Cloudflare.',warpNoProfiles:'Нет VPN-подключений.',warpStale:'Статус устарел — нажмите «Обновить».',warpConflict:'Запрос уже выполняется. Дождитесь завершения.'});
+Object.assign(en,{settingsWarp:'WARP',warpIntro:'Route VPN clients to the Internet through Cloudflare. Device connections to your server stay unchanged.',warpClients:'VPN clients',warpInternet:'Internet',warpInstall:'Install WARP',warpAcceptTerms:'I accept Cloudflare terms to register this WARP client.',warpReadTerms:'Read terms',warpRegister:'Register WARP',warpEnable:'Use WARP',warpEnableNote:'SSH and the panel keep their normal Internet route.',warpScope:'VPN connections',warpSelected:'Selected VPN connections',warpAll:'All, including new connections',warpProtocol:'Protocol to Cloudflare',warpAdvanced:'Advanced: WARP DNS',warpDns:'Up to two IPv4 DNS addresses, separated by commas',warpDnsNote:'Empty uses current server upstream DNS. Host DNS and client configuration files stay unchanged.',warpPolicy:'If WARP fails, selected traffic is blocked. Disable WARP and save to restore direct egress. Existing connections may need to reconnect.',warpDocs:'Official Cloudflare documentation ↗',warpNotInstalled:'Not installed',warpUnregistered:'Registration required',warpOff:'Disabled',warpOnline:'Connected',warpBlocked:'WARP unavailable',warpBusy:'Operation in progress…',warpReady:'Operation completed.',warpInstallNote:'Installing the official client may take a few minutes. WARP is not enabled automatically.',warpSelectionRequired:'Select at least one VPN connection.',warpTermsRequired:'Accept Cloudflare terms before registration.',warpNoProfiles:'No VPN connections.',warpStale:'Status is stale. Select Refresh.',warpConflict:'An operation is already running. Wait for it to finish.'});
+let warpData=null,warpDirty=false,warpLoading=false,warpSubmitting=false,warpRevision=0;
+function renderWarp(){if(!warpData)return;const w=warpData,busy=warpSubmitting||['queued','running'].includes(w.task.state),cfg=w.config;$('#warpInstall').hidden=w.installed;$('#warpInstall').disabled=busy;$('#warpRefresh').disabled=busy;$('#warpRegister').disabled=busy||!$('#warpTerms').checked;$('#warpRegistration').hidden=!w.installed||w.registered;$('#warpForm').hidden=!w.installed||!w.registered;$('#warpFields').disabled=!w.installed||!w.registered||busy;$('#warpVersion').textContent=w.version||'';
+ $('#warpRestore').hidden=!w.restore_pending||cfg.enabled;
+ $('#warpApplyRestored').hidden=!w.installed||!w.registered;
+ $('#warpApplyRestored').disabled=busy;
+ const recent=w.runtime.checked_at&&Date.now()/1000-w.runtime.checked_at<90,key=!w.installed?'warpNotInstalled':!w.registered?'warpUnregistered':!cfg.enabled?'warpOff':!recent?'warpStale':w.runtime.connected?'warpOnline':'warpBlocked';$('#warpBadge').textContent=t(key);$('#warpBadge').className='pill '+(key==='warpOnline'?'status-online':key==='warpBlocked'?'status-disabled':'');
+ if(!warpDirty){const f=$('#warpForm');f.enabled.checked=cfg.enabled;f.scope.value=cfg.scope;f.protocol.value=cfg.protocol;f.dns.value=cfg.dns.join(', ');$('#warpProfiles').innerHTML=data.profiles.length?data.profiles.map(p=>`<label><input type="checkbox" name="warpProfile" value="${p.id}" ${cfg.profile_ids.includes(p.id)?'checked':''}><span><strong>${esc(p.name)}</strong><small>${esc(p.interface)} · ${esc(p.protocol==='wireguard'?'WireGuard':'AWG '+p.version)}</small></span></label>`).join(''):`<p>${t('warpNoProfiles')}</p>`;}
+ $('#warpProfiles').hidden=$('#warpForm').scope.value==='all';$('#warpMessage').textContent=busy?t('warpBusy')+(w.task.action==='install'?' '+t('warpInstallNote'):''):w.task.state==='done'?t('warpReady'):'';$('#warpError').textContent=w.task.state==='failed'?w.task.error:'';}
+async function loadWarp(){
+ if(warpLoading||warpSubmitting||$('#appShell').hidden)return;
+ const revision=warpRevision;
+ warpLoading=true;
+ try{
+  const result=await api('warp');
+  if(revision===warpRevision){warpData=result;renderWarp();}
+ }catch(e){if(revision===warpRevision)$('#warpError').textContent=e.message;}
+ finally{warpLoading=false;}
+}
+async function warpAction(action,payload={}){
+ if(warpSubmitting)return;
+ warpSubmitting=true;
+ warpRevision++;
+ renderWarp();
+ let failure='';
+ try{
+  await api('warp/'+action,{method:'POST',body:JSON.stringify(payload)});
+  if(action==='save')warpDirty=false;
+  if(warpData)warpData.task={state:'queued',action};
+ }catch(e){failure=e.message;}
+ finally{warpSubmitting=false;renderWarp();}
+ if(failure){$('#warpError').textContent=failure;return;}
+ await loadWarp();
+}
+$('#warpInstall').onclick=()=>warpAction('install');$('#warpRefresh').onclick=()=>warpData?.config.enabled?warpAction('check'):loadWarp();$('#warpTerms').onchange=()=>renderWarp();$('#warpRegister').onclick=()=>{if(!$('#warpTerms').checked){$('#warpError').textContent=t('warpTermsRequired');return;}warpAction('register',{accept_terms:true});};
+$('#warpForm').oninput=()=>{warpDirty=true;$('#warpProfiles').hidden=$('#warpForm').scope.value==='all';};
+$('#warpApplyRestored').onclick=()=>{
+ if(!warpData?.registered)return;
+ const form=$('#warpForm');
+ form.enabled.checked=true;
+ form.requestSubmit();
+};
+$('#warpForm').onsubmit=e=>{e.preventDefault();const f=e.target,ids=$$('#warpProfiles input:checked').map(el=>Number(el.value));if(f.enabled.checked&&f.scope.value==='selected'&&!ids.length){$('#warpError').textContent=t('warpSelectionRequired');return;}warpAction('save',{enabled:f.enabled.checked,scope:f.scope.value,profile_ids:ids,protocol:f.protocol.value,dns:f.dns.value.split(',').map(v=>v.trim()).filter(Boolean)});};
+$('.settings-tabs').addEventListener('click',e=>{if(e.target.closest('[data-settings-tab="warp"]'))loadWarp();});
+setInterval(()=>{if(page==='settings'&&$('#settingsPage').dataset.tab==='warp'&&!$('#appShell').hidden)loadWarp();},4000);
+
+Object.assign(ru, {
+ settingsAddress:'Адрес', settingsBackup:'Копии', settingsVpnHeading:'VPN и язык',
+ settingsVpnAddressHelp:'Адрес для подключений, новых файлов и QR. Сохранённые на устройствах файлы остаются прежними.',
+ warpIntro:'Выход клиентов VPN в интернет через Cloudflare.',
+ warpRefreshStatus:'Проверить статус', warpScope:'Профили VPN для WARP',
+ warpAll:'Все VPN-профили, включая новые', warpMasque:'MASQUE (по умолчанию)',
+ warpPolicy:'При сбое WARP выбранные подключения теряют доступ в интернет. Отключите WARP для прямого выхода.',
+ settingsAccountHeading:'Пароль администратора', panelDomain:'Домен', panelTcpPort:'Порт TCP',
+ settingsConsole:'Настройка из консоли сервера', portableDownload:'Резервная копия',
+ endpointCheck:'Проверить DNS и порт', endpointChecking:'Проверяем адрес и порт…',
+ endpointDnsUnavailable:'домен не разрешился', endpointLocal:'IP назначен этому VPS',
+ endpointOther:'IP не найден среди адресов VPS. Проверьте DNS или настройки ретранслятора.',
+ endpointListening:'Локально слушается', endpointListenMismatch:'Локальный UDP-порт отличается или недоступен',
+ endpointScopeNote:'Проверка не измеряет доступность VPN из сети клиента.',
+ warpRestorePending:'Настройки WARP перенесены. На новом VPS установите и зарегистрируйте WARP, затем включите перенесённые настройки.',
+ warpApplyRestored:'Включить перенесённый WARP',
+ portableContents:'Клиенты, их версии, ключи, порты, лимиты и настройки VPN в одном файле.',
+ portableDownloadAction:'Скачать копию',
+ portableSecret:'Файл содержит приватные ключи. Используйте HTTPS и храните его в защищённом месте.',
+ portableOtherCopies:'Другие способы резервного копирования', portableSql:'Скачать прежнюю копию SQL',
+ portableRestore:'Восстановление', portableRestoreNote:'Для чистой установки. Выберите файл, чтобы посмотреть, что будет восстановлено.',
+ portableFile:'Файл резервной копии', portableReview:'Проверить копию', portableApply:'Восстановить',
+ portableWarp:'Параметры WARP перенесутся. На новом сервере зарегистрируйте и включите WARP.',
+ portableBusy:'Восстанавливаем подключения…', portableDone:'Восстановлено клиентов',
+ portableClean:'Для восстановления нужна чистая установка без клиентов с выключенным WARP.',
+ portableVariants:'Дополнительные версии', portablePorts:'Порты UDP',
+ portableTarget:'Логин, пароль и адрес панели сохранятся. Убедитесь, что VPN-домен указывает на новый сервер.',
+ trafficOnlineOnly:'Только в сети'
+});
+Object.assign(en, {
+ settingsAddress:'Address', settingsBackup:'Backups', settingsVpnHeading:'VPN and language',
+ settingsVpnAddressHelp:'Address for connections, new files and QR codes. Files already saved on devices keep their address.',
+ warpIntro:'Send VPN clients’ internet traffic through Cloudflare.',
+ warpRefreshStatus:'Check status', warpScope:'VPN profiles for WARP',
+ warpAll:'All VPN profiles, including new ones', warpMasque:'MASQUE (default)',
+ warpPolicy:'If WARP fails, selected connections lose internet access. Disable WARP to restore direct access.',
+ settingsAccountHeading:'Administrator password', panelDomain:'Domain', panelTcpPort:'TCP port',
+ settingsConsole:'Server console setup', portableDownload:'Backup',
+ endpointCheck:'Check DNS and port', endpointChecking:'Checking address and port…',
+ endpointDnsUnavailable:'DNS returned no addresses', endpointLocal:'IP assigned to this VPS',
+ endpointOther:'No VPS address matches. Check DNS or the relay configuration.',
+ endpointListening:'Local listener', endpointListenMismatch:'Local UDP port differs or is unavailable',
+ endpointScopeNote:'This check does not measure VPN reachability from a client network.',
+ warpRestorePending:'WARP settings were restored. Install and register WARP on this VPS, then enable the restored settings.',
+ warpApplyRestored:'Enable restored WARP',
+ portableContents:'Clients, variants, keys, ports, limits and VPN settings in one file.',
+ portableDownloadAction:'Download backup',
+ portableSecret:'The file contains private keys. Use HTTPS and keep it in a secure location.',
+ portableOtherCopies:'Other backup options', portableSql:'Download legacy SQL backup',
+ portableRestore:'Restore', portableRestoreNote:'For a fresh installation. Select a backup to see what it contains.',
+ portableFile:'Backup file', portableReview:'Preview backup', portableApply:'Restore',
+ portableWarp:'WARP preferences will be copied. Register and enable WARP on the new server.',
+ portableBusy:'Restoring connections…', portableDone:'Clients restored',
+ portableClean:'Restore requires a fresh installation with no clients and WARP disabled.',
+ portableVariants:'Additional versions', portablePorts:'UDP ports',
+ portableTarget:'The destination sign-in and panel address stay in place. Make sure the VPN domain points to this server.',
+ trafficOnlineOnly:'Online only'
+});
+
+let restoreSelection=null,restoreBusy=false;
+const restoreDialog=$('#restoreDialog');
+$('#restoreClose').onclick=()=>restoreDialog.close();
+restoreDialog.addEventListener('cancel',event=>{if(restoreBusy)event.preventDefault();});
+restoreDialog.addEventListener('close',()=>{
+ restoreSelection=null;
+ $('#restoreApplyForm').reset();
+ $('#restoreApplyError').textContent='';
+});
+$('#restoreFile').onchange=()=>{$('#restorePreviewError').textContent='';};
+$('#restorePreviewForm').onsubmit=async event=>{
+ event.preventDefault();
+ const form=event.currentTarget,file=form.elements.backup.files[0],button=$('#restorePreviewButton');
+ if(!file||button.disabled)return;
+ button.disabled=true;
+ $('#restorePreviewError').textContent='';
+ const upload=new FormData();
+ upload.set('backup',file);
+ try{
+  const info=await api('restore/preview',{method:'POST',body:upload});
+  if(!info.can_restore){$('#restorePreviewError').textContent=t('portableClean');return;}
+  restoreSelection={file,digest:info.digest};
+  $('#restoreDetails').textContent=[
+   t('clients')+' '+info.clients,t('profiles')+' '+info.profiles,
+   t('portableVariants')+' '+info.variants,
+   info.ports.length?t('portablePorts')+' '+info.ports.join(', '):''
+  ].filter(Boolean).join(' · ');
+  $('#restoreDestination').textContent=(info.vpn_host?info.vpn_host+' · ':'')+t('portableTarget');
+  $('#restoreWarpNote').hidden=!info.warp_was_enabled;
+  restoreDialog.showModal();
+ }catch(err){$('#restorePreviewError').textContent=err.message;}
+ finally{button.disabled=false;}
+};
+$('#restoreApplyForm').onsubmit=async event=>{
+ event.preventDefault();
+ if(!restoreSelection||restoreBusy)return;
+ const form=event.currentTarget,button=$('#restoreApplyButton'),upload=new FormData(form);
+ upload.set('backup',restoreSelection.file);
+ upload.set('digest',restoreSelection.digest);
+ form.reset();
+ restoreBusy=true;
+ button.disabled=true;
+ $('#restoreClose').disabled=true;
+ $('#restoreApplyError').textContent='';
+ button.textContent=t('portableBusy');
+ try{
+  const result=await api('restore',{method:'POST',body:upload});
+  restoreDialog.close();
+  $('#restorePreviewForm').reset();
+  lang=result.language;
+  localStorage.setItem('ac-language',lang);
+  await load();
+  translate();
+  toast(t('portableDone')+' '+result.clients);
+ }catch(err){$('#restoreApplyError').textContent=err.message;}
+ finally{
+  restoreBusy=false;
+  button.disabled=false;
+  $('#restoreClose').disabled=false;
+  button.textContent=t('portableApply');
+ }
+};
+
+translate();

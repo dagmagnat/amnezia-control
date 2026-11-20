@@ -12,3 +12,4 @@ outputs/
 *.tgz
 *.zip
 *.sql
+*.ac-backup.json

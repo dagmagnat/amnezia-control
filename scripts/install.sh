@@ -27,7 +27,7 @@ ask '1) Вход по IP  2) Домен + IP [1]:' '1) IP access  2) Domain + IP
 if [[ $MODE == 2 ]]; then ask 'Домен панели (пример panel.example.com):' 'Panel domain (panel.example.com):'; PANEL_DOMAIN=$REPLY; fi
 ask 'Публичный IP этого VPS (Enter = определить автоматически):' 'Public IP of this VPS (Enter = auto-detect):'; PANEL_IP=$REPLY
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv nginx curl ca-certificates git rsync sqlite3 iptables iproute2 openssl wireguard-tools certbot python3-certbot-nginx
+DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv nginx curl ca-certificates git rsync sqlite3 iptables iproute2 nftables openssl wireguard-tools certbot python3-certbot-nginx
 if [[ -z $PANEL_IP ]]; then PANEL_IP=$(curl -4 -fsS --max-time 10 https://api.ipify.org) || { echo 'Enter public IP manually';exit 1; }; fi
 if [[ -n $PANEL_DOMAIN ]]; then
   if ! getent ahostsv4 "$PANEL_DOMAIN" | awk '{print $1}' | grep -Fxq "$PANEL_IP"; then
@@ -66,12 +66,14 @@ systemctl daemon-reload
 printf '%s' "$PANEL_IP" | "$APP_DIR/.venv/bin/python" -c 'import sys,json;print(json.dumps(dict(host=sys.stdin.read())))' | "$APP_DIR/.venv/bin/python" "$APP_DIR/backend/manage.py" provision
 install -m 644 "$APP_DIR/systemd/amnezia-control.service" /etc/systemd/system/amnezia-control.service
 systemctl daemon-reload
+bash "$APP_DIR/scripts/setup-warp-units.sh"
 systemctl enable --now nginx
 export PANEL_DOMAIN PANEL_PORT PANEL_IP
 "$APP_DIR/.venv/bin/python" -c 'import os,json;print(json.dumps(dict(domain=os.environ["PANEL_DOMAIN"],port=int(os.environ["PANEL_PORT"]),ip=os.environ["PANEL_IP"])))' | "$APP_DIR/.venv/bin/python" "$APP_DIR/backend/manage.py" panel
 systemctl enable --now amnezia-control
 bash "$APP_DIR/scripts/wait-panel.sh"
 systemctl is-active --quiet amnezia-control
+bash "$APP_DIR/scripts/setup-awg-reply.sh"
 if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then ufw allow "$PANEL_PORT/tcp"; ufw allow 51820/udp; ufw allow 51821/udp; fi
 say 'Установка завершена.' 'Installation complete.'
 printf 'IP: http://%s:%s\nLogin: %s\nWireGuard UDP: 51820\nAmneziaWG UDP: 51821\n' "$PANEL_IP" "$PANEL_PORT" "$ADMIN_USER"

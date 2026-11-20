@@ -1,0 +1,21 @@
+[Unit]
+Description=Official Cloudflare WARP client in isolated namespace
+After=ac-warp-network.service
+Requires=ac-warp-network.service
+ConditionPathExists=/var/lib/amnezia-control/warp/bin/warp-svc
+
+[Service]
+Type=simple
+NetworkNamespacePath=/run/netns/ac-warp
+PrivateMounts=yes
+BindReadOnlyPaths=/etc/netns/ac-warp/resolv.conf:/etc/resolv.conf
+ExecStart=/var/lib/amnezia-control/warp/bin/warp-svc
+Restart=on-failure
+RestartSec=5
+StateDirectory=cloudflare-warp
+RuntimeDirectory=cloudflare-warp
+LogsDirectory=cloudflare-warp
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

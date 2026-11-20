@@ -1,0 +1,12 @@
+[Unit]
+Description=Reconcile WARP egress selection and connection status
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/amnezia-control
+Environment=AMNEZIA_CONTROL_DATA=/var/lib/amnezia-control
+ExecStart=/opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/warp.py reconcile
+UMask=0077
+TimeoutStartSec=90

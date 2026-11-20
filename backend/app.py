@@ -133,7 +133,19 @@ def summary():
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
                    capabilities={'wireguard':bool(shutil.which('wg')),'amneziawg':bool(shutil.which('awg')),'generations':GENERATIONS,'client_versions':CLIENT_VERSIONS},
-                   version='0.6.4')
+                   version='0.7.2')
+
+@app.get('/api/warp')
+@auth
+def warp_status():
+    import warp
+    return jsonify(**warp.status())
+
+@app.post('/api/warp/<action>')
+@auth
+def warp_action(action):
+    import warp
+    return jsonify(**warp.queue(action,body())),202
 
 @app.get('/api/traffic')
 @auth
@@ -166,6 +178,14 @@ def add_profile():
     with state.LOCK,state.connection() as con:
         profile=create_profile(con,body())
     return jsonify(ok=True,id=profile['id']),201
+
+@app.get('/api/profiles/<int:ident>/endpoint-check')
+@auth
+def check_profile_endpoint(ident):
+    from endpoints import check
+    with state.connection() as con:
+        profile = profile_by_id(con, ident)
+    return jsonify(check(profile))
 
 @app.patch('/api/profiles/<int:ident>')
 @auth
@@ -402,6 +422,31 @@ def backup():
     data='\n'.join(memory.iterdump()); memory.close()
     # Includes all server/client private keys. Authenticated, no-store download only.
     return app.response_class(data,mimetype='application/sql',headers={'Content-Disposition':'attachment; filename="amnezia-control.sql"'})
+
+@app.get('/api/backup/portable')
+@auth
+def portable_download():
+    import portable_backup
+    name = time.strftime('amnezia-control-%Y%m%d-%H%M%S.ac-backup.json', time.gmtime())
+    return app.response_class(portable_backup.export(), mimetype='application/json',
+                              headers={'Content-Disposition': f'attachment; filename="{name}"'})
+
+@app.post('/api/restore/preview')
+@auth
+def portable_preview():
+    import portable_backup
+    data, digest = portable_backup.read(request.files.get('backup'))
+    return jsonify(portable_backup.preview(data, digest))
+
+@app.post('/api/restore')
+@auth
+def portable_restore():
+    import portable_backup
+    with state.connection() as con:
+        if not password_ok(request.form.get('password', ''), state.value(con, 'admin_password')):
+            raise Problem('Invalid current password', 403)
+    data, digest = portable_backup.read(request.files.get('backup'))
+    return jsonify(portable_backup.restore(data, digest, request.form.get('digest', '')))
 
 @app.patch('/api/panel-access')
 @auth

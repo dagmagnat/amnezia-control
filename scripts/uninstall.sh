@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 [[ $EUID -eq 0 ]] || exit 1
-read -r -p '1) Панель / Panel only  2) Панель и созданные VPN / Panel + managed VPN [1]: ' MODE
+read -r -p '1) РџР°РЅРµР»СЊ / Panel only  2) РџР°РЅРµР»СЊ Рё СЃРѕР·РґР°РЅРЅС‹Рµ VPN / Panel + managed VPN [1]: ' MODE
 if [[ ${MODE:-1} == 2 ]]; then
   echo 'This deletes managed server/client keys. Existing external VPN services are preserved.'
 fi
-read -r -p 'Введите REMOVE / Type REMOVE: ' CONFIRM
+read -r -p 'Р’РІРµРґРёС‚Рµ REMOVE / Type REMOVE: ' CONFIRM
 [[ $CONFIRM == REMOVE ]] || exit 0
 bash /opt/amnezia-control/scripts/backup.sh
+# Restore direct client egress before removing the optional WARP integration.
+if [[ -f /opt/amnezia-control/backend/warp.py ]]; then
+  /opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/warp.py cleanup
+  systemctl disable --now ac-warp-watch.timer ac-warp-guard.service || true
+  systemctl stop ac-warp-client ac-warp-network || true
+fi
 systemctl disable --now amnezia-control
 if [[ ${MODE:-1} == 2 ]]; then
   /opt/amnezia-control/.venv/bin/python - <<'PY'
@@ -24,11 +30,17 @@ for p in con.execute('SELECT * FROM profiles'):
 PY
   rm -f /etc/sysctl.d/99-amnezia-control.conf
 fi
+rm -f /etc/systemd/system/ac-warp-{guard,network,client,watch}.service /etc/systemd/system/ac-warp-watch.timer
 rm -f /etc/nginx/sites-enabled/amnezia-control /etc/nginx/sites-available/amnezia-control /etc/systemd/system/amnezia-control.service
 systemctl daemon-reload
 nginx -t && systemctl reload nginx
 if [[ ${MODE:-1} == 2 ]]; then
-  rm -f /etc/systemd/system/ac-awg@.service
+  systemctl disable --now ac-awg-reply-refresh.timer || true
+  if [[ -f /opt/amnezia-control/backend/reply_source.py ]]; then
+    /opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/reply_source.py --remove
+  fi
+  rm -f /etc/systemd/system/ac-awg-reply-refresh.service /etc/systemd/system/ac-awg-reply-refresh.timer
+  rm -f /etc/systemd/system/ac-awg@.service /etc/systemd/system/ac-warp-{guard,network,client,watch}.service /etc/systemd/system/ac-warp-watch.timer
   rm -rf /var/lib/amnezia-control /etc/amnezia-control /opt/amnezia-control
   systemctl daemon-reload
 else

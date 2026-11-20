@@ -120,6 +120,8 @@ def taken_addresses(con):
         'SELECT address FROM clients UNION SELECT address FROM client_variants UNION SELECT address FROM profiles')}
 
 def sync(con, profile):
+    import warp
+    warp.guard_profile(dict(profile))
     ENGINE.apply(dict(profile), all_peers(con,profile['id']))
 
 def refresh():

@@ -12,22 +12,23 @@ if [[ -z $SOURCE ]]; then
 fi
 [[ -f $SOURCE/backend/manage.py && -f $SOURCE/dist/app.js ]] || { echo 'Not a complete 0.2 release';exit 1; }
 apt-get update
-apt-get install -y rsync python3-venv iptables wireguard-tools
+apt-get install -y rsync python3-venv iptables nftables wireguard-tools
 BACKUP_DIR=/root/amnezia-control-backups/$(date +%Y%m%d-%H%M%S)
 install -d -m 700 "$BACKUP_DIR/source"
 rsync -a --exclude=.git --exclude=.venv --exclude=work --exclude=outputs "$APP_DIR/" "$BACKUP_DIR/source/"
-# Back up DB, original interfaces, panel service and Nginx settings before replacing code.
-paths=()
-for path in /var/lib/amnezia-control /etc/amnezia-control /etc/wireguard /etc/amnezia /etc/nginx/sites-available/amnezia-control /etc/systemd/system/amnezia-control.service; do
-  [[ ! -e $path ]] || paths+=("$path")
-done
 systemctl stop amnezia-control
 umask 077
-tar -czf "$BACKUP_DIR/state.tar.gz" "${paths[@]}"
+if ! bash "$SOURCE/scripts/backup.sh" "$BACKUP_DIR/state.tar.gz" --root-layout; then
+  systemctl start amnezia-control
+  echo 'Could not verify the server backup. Update cancelled.'
+  exit 1
+fi
 rollback(){
   echo "Update failed. Restoring previous application. Backup: $BACKUP_DIR"
+  systemctl stop amnezia-control || true
   rsync -a "$BACKUP_DIR/source/" "$APP_DIR/"
   # Restore data while the service is stopped. VPN interfaces were not restarted.
+  rm -f /var/lib/amnezia-control/{control,traffic}.db-{wal,shm}
   tar -xzf "$BACKUP_DIR/state.tar.gz" -C /
   systemctl daemon-reload
   systemctl start amnezia-control || true
@@ -45,10 +46,12 @@ export AMNEZIA_CONTROL_ROOT=$APP_DIR AMNEZIA_CONTROL_DATA=/var/lib/amnezia-contr
 install -m 644 "$APP_DIR/systemd/amnezia-control.service" /etc/systemd/system/amnezia-control.service
 install -m 644 "$APP_DIR/systemd/ac-awg@.service" /etc/systemd/system/ac-awg@.service
 systemctl daemon-reload
+bash "$APP_DIR/scripts/setup-warp-units.sh"
 systemctl reset-failed amnezia-control
 systemctl start amnezia-control
 bash "$APP_DIR/scripts/wait-panel.sh"
 systemctl is-active --quiet amnezia-control
+bash "$APP_DIR/scripts/setup-awg-reply.sh"
 trap - ERR
 printf 'Updated successfully. Backup / Копия: %s\n' "$BACKUP_DIR"
 echo 'Existing VPN keys and Nginx IP:port settings preserved. Refresh browser with Ctrl+F5.'

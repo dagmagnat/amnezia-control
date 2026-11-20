@@ -1,0 +1,15 @@
+[Unit]
+Description=Isolated network for optional Amnezia Control WARP egress
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/amnezia-control
+Environment=AMNEZIA_CONTROL_DATA=/var/lib/amnezia-control
+ExecStart=/opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/warp.py network
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Keep AmneziaWG 3.1 IPv4 replies on the addressed interface
+Wants=network-online.target
+After=network-online.target nftables.service netfilter-persistent.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/reply_source.py
+TimeoutStartSec=40
+UMask=0077

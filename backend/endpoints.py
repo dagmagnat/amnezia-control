@@ -1,11 +1,45 @@
 """Change the advertised VPN host without altering keys, ports or runtime peers."""
+import ipaddress
+import json
 import os
 import secrets
 import sqlite3
+import subprocess
 import time
 
 import core
 import state
+
+
+def check(profile):
+    """Resolve the configured destination and check its own server listener."""
+    destination = core.endpoint(profile['endpoint'])
+    name, port = destination.rsplit(':', 1)
+    name = name.strip('[]')
+    addresses = set()
+    try:
+        addresses.add(ipaddress.ip_address(name))
+    except ValueError:
+        try:
+            result = subprocess.run(['getent', 'ahosts', name], text=True, capture_output=True, timeout=5)
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if fields:
+                    addresses.add(ipaddress.ip_address(fields[0]))
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    try:
+        links = json.loads(core.command('ip', '-j', 'address', 'show'))
+        local = {ipaddress.ip_address(item['local']) for link in links for item in link.get('addr_info', [])}
+        local_matches = [str(value) for value in sorted(addresses & local, key=str)]
+    except (core.Problem, ValueError, KeyError):
+        local_matches = None
+    try:
+        bound = core.command(core.binary(profile), 'show', profile['interface'], 'listen-port')
+    except core.Problem:
+        bound = ''
+    return {'endpoint': destination, 'addresses': sorted(map(str, addresses)), 'local_matches': local_matches,
+            'advertised_port': int(port), 'listen_port': int(bound) if bound.isdecimal() else None}
 
 
 def change_host(con, hostname):

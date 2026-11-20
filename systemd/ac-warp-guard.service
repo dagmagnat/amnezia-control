@@ -1,0 +1,16 @@
+[Unit]
+Description=Restore WARP forwarding protection before network startup
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+Environment=AMNEZIA_CONTROL_DATA=/var/lib/amnezia-control
+WorkingDirectory=/opt/amnezia-control
+ExecStart=/opt/amnezia-control/.venv/bin/python /opt/amnezia-control/backend/warp.py guard
+UMask=0077
+
+[Install]
+WantedBy=network-pre.target
