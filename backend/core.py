@@ -193,7 +193,9 @@ def interface_text(profile, peers, quick=True):
 def firewall_rules(profile):
     iface = profile['interface']; subnet = str(ipaddress.ip_interface(profile['address']).network)
     # Dedicated, labelled rules. Never flush or replace existing firewall tables.
-    return [ ['INPUT','-p','udp','--dport',str(profile['port']),'-m','comment','--comment','ac-'+iface,'-j','ACCEPT'],
+    import routewolf
+    listener = routewolf.external_port(profile) if routewolf.is_wrapped(profile) else profile['port']
+    return [ ['INPUT','-p','udp','--dport',str(listener),'-m','comment','--comment','ac-'+iface,'-j','ACCEPT'],
              ['FORWARD','-i',iface,'-m','comment','--comment','ac-'+iface,'-j','ACCEPT'],
              ['FORWARD','-o',iface,'-m','conntrack','--ctstate','RELATED,ESTABLISHED','-m','comment','--comment','ac-'+iface,'-j','ACCEPT'],
              ['POSTROUTING','-s',subnet,'-m','comment','--comment','ac-'+iface,'-j','MASQUERADE'] ]
@@ -227,6 +229,9 @@ class Engine:
         try:
             atomic_text(runtime, interface_text(profile, peers, quick=False)+suffix)
             command(b, 'syncconf', iface, str(runtime))
+            import routewolf
+            if routewolf.is_wrapped(profile):
+                routewolf.sync(profile, peers)
         except Problem:
             if previous is not None: atomic_text(path, previous)
             # syncconf may apply partially; restore original runtime if possible.

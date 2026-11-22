@@ -195,6 +195,9 @@ def build_plan(con, files, options):
     elif mode == 'clients':
         row = con.execute('SELECT * FROM profiles WHERE id=?', (options.get('profile_id'),)).fetchone()
         if not row: raise core.Problem('Choose the destination VPN profile')
+        import routewolf
+        if routewolf.is_wrapped(row):
+            raise core.Problem('Create RouteWolf clients in the panel or restore from a panel backup',409)
         profile = dict(row)
     else: raise core.Problem('Unknown import mode')
 

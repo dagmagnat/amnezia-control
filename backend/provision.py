@@ -3,15 +3,32 @@ import ipaddress
 import json
 import shutil
 import core
+import routewolf
 import state
 
 CLIENT_VERSIONS = list(core.GENERATIONS)
 
 
+def occupied_ports(con):
+    busy = set()
+    for row in con.execute('SELECT * FROM profiles'):
+        busy.add(row['port'])
+        if routewolf.is_wrapped(row):
+            busy.add(routewolf.external_port(row))
+    for line in core.command('ss', '-H', '-lun').splitlines():
+        fields = line.split()
+        if len(fields) > 3 and fields[3].rsplit(':', 1)[-1].isdigit():
+            busy.add(int(fields[3].rsplit(':', 1)[-1]))
+    return busy
+
+
 def create_profile(con, data):
     protocol=data.get('protocol'); version=data.get('version')
+    wrapped = protocol == routewolf.VERSION
+    if wrapped:
+        protocol, version = 'wireguard', routewolf.VERSION
     if protocol not in ('wireguard','amneziawg'): raise core.Problem('Unknown protocol')
-    if protocol=='wireguard': version='wg'
+    if protocol=='wireguard': version=routewolf.VERSION if wrapped else 'wg'
     elif version not in core.GENERATIONS: raise core.Problem('Unknown AmneziaWG generation')
     b='awg' if protocol=='amneziawg' else 'wg'
     if not shutil.which(b): raise core.Problem(b+' is not installed',503)
@@ -30,10 +47,21 @@ def create_profile(con, data):
     for row in con.execute('SELECT address FROM profiles'):
         if network.overlaps(ipaddress.ip_interface(row['address']).network): raise core.Problem('Subnet overlaps another connection')
     iface=f'ac{b}{n}'; port=core.number(data.get('port'),1024,65535)
+    if wrapped:
+        if int(destination.rsplit(':', 1)[1]) != port:
+            raise core.Problem('The RouteWolf Endpoint must use the selected UDP port')
+        routewolf.bind_host(destination)
+        busy = occupied_ports(con)
+        if port in busy: raise core.Problem('UDP port already used')
+        busy.add(port)
+        port = next((candidate for candidate in range(51820, 65536) if candidate not in busy), None)
+        if port is None: raise core.Problem('No free UDP port for the WireGuard backend')
+    elif any(routewolf.is_wrapped(p) and routewolf.external_port(p) == port for p in con.execute('SELECT * FROM profiles')):
+        raise core.Problem('UDP port already used by a RouteWolf connection')
     if con.execute('SELECT 1 FROM profiles WHERE port=?',(port,)).fetchone(): raise core.Problem('UDP port already used')
     if core.config_path({'interface':iface,'protocol':protocol}).exists(): raise core.Problem('Interface config already exists')
     private,public=core.keys(b)
-    name=str(data.get('name') or ('AmneziaWG '+version if b=='awg' else 'WireGuard')).strip()[:60]
+    name=str(data.get('name') or (routewolf.NAME if wrapped else ('AmneziaWG '+version if b=='awg' else 'WireGuard'))).strip()[:60]
     cur=con.execute('INSERT INTO profiles(name,protocol,version,interface,address,port,endpoint,private_key,public_key,params) VALUES(?,?,?,?,?,?,?,?,?,?)',
         (name,protocol,version,iface,str(next(network.hosts()))+'/24',port,destination,private,public,json.dumps(params)))
     profile=dict(con.execute('SELECT * FROM profiles WHERE id=?',(cur.lastrowid,)).fetchone())
@@ -46,6 +74,8 @@ def create_profile(con, data):
 
 
 def cleanup_profile(profile):
+    if routewolf.is_wrapped(profile):
+        routewolf.cleanup(profile)
     for action in ('stop','disable'):
         try: core.command('systemctl',action,core.service(profile))
         except core.Problem: pass
@@ -63,8 +93,11 @@ def usable(profile):
 
 
 def ensure_profile(con, protocol, version):
+    wrapped = protocol == routewolf.VERSION
+    if wrapped:
+        protocol, version = 'wireguard', routewolf.VERSION
     if protocol not in ('wireguard','amneziawg'): raise core.Problem('Choose WireGuard or AmneziaWG')
-    version='wg' if protocol=='wireguard' else version
+    version=('routewolf' if wrapped else 'wg') if protocol=='wireguard' else version
     if protocol=='amneziawg' and version not in CLIENT_VERSIONS: raise core.Problem('Choose a supported AmneziaWG generation')
     for row in con.execute('SELECT * FROM profiles WHERE protocol=? AND version=? ORDER BY id',(protocol,version)):
         network=ipaddress.ip_interface(row['address']).network
@@ -79,12 +112,9 @@ def ensure_profile(con, protocol, version):
             hostname=state.value(con,'panel_ip')
     if not hostname: raise core.Problem('Set the VPN server IP/domain in Settings first')
     hostname=core.host(hostname)
-    port=51820 if protocol=='wireguard' else {'3.1':51821,'2.0':51822,'1.5':51823,'1.0':51824,'3.0':51825}[version]
-    busy=set()
-    for line in core.command('ss','-H','-lun').splitlines():
-        fields=line.split()
-        if len(fields)>3 and fields[3].rsplit(':',1)[-1].isdigit(): busy.add(int(fields[3].rsplit(':',1)[-1]))
-    while port in busy or con.execute('SELECT 1 FROM profiles WHERE port=?',(port,)).fetchone(): port+=1
+    port=51988 if wrapped else (51820 if protocol=='wireguard' else {'3.1':51821,'2.0':51822,'1.5':51823,'1.0':51824,'3.0':51825}[version])
+    busy=occupied_ports(con)
+    while port in busy: port+=1
     if port>65535: raise core.Problem('No free UDP port')
     destination=(f'[{hostname}]' if ':' in hostname else hostname)+':'+str(port)
-    return create_profile(con,{'protocol':protocol,'version':version,'port':port,'endpoint':destination}),True
+    return create_profile(con,{'protocol':routewolf.VERSION if wrapped else protocol,'version':version,'port':port,'endpoint':destination}),True

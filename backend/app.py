@@ -128,7 +128,13 @@ def summary():
         profiles=[]
         for row in con.execute('SELECT * FROM profiles ORDER BY id'):
             p=dict(row); _,error=state.ENGINE.stats(p)
-            profiles.append({k:v for k,v in p.items() if k!='private_key'} | {'active':not bool(error)})
+            import routewolf
+            port = p['port']
+            if routewolf.is_wrapped(p):
+                port = routewolf.external_port(p)
+                try: command('systemctl', 'is-active', routewolf.service(p))
+                except Problem: error = 'RouteWolf transport unavailable'
+            profiles.append({k:v for k,v in p.items() if k!='private_key'} | {'active':not bool(error), 'udp_port':port})
         events=[dict(r) for r in con.execute('SELECT * FROM events ORDER BY id DESC LIMIT 25')]
         panel={'domain':state.value(con,'panel_domain'),'ip':state.value(con,'panel_ip'),'port':int(state.value(con,'panel_port','8080')),'language':state.value(con,'language','ru'),'vpn_host':state.value(con,'vpn_host')}
     return jsonify(clients=clients,profiles=profiles,events=events,panel=panel,
@@ -193,7 +199,12 @@ def edit_profile(ident):
     data=body()
     with state.LOCK,state.connection() as con:
         p=profile_by_id(con,ident)
-        if 'endpoint' in data: p['endpoint']=endpoint(data['endpoint'])
+        if 'endpoint' in data:
+            destination = endpoint(data['endpoint'])
+            import routewolf
+            if routewolf.is_wrapped(p):
+                routewolf.check_endpoint_change(p, destination)
+            p['endpoint']=destination
         if 'name' in data: p['name']=str(data['name']).strip()[:60]
         # Existing obfuscation changes invalidate client files: explicit opt-in required.
         if 'params' in data:
@@ -235,7 +246,9 @@ def add_clients():
         except Exception:
             if created_profile: cleanup_profile(p)
             raise
-    return jsonify(ok=True,ids=ids,profile_id=p['id'],endpoint=p['endpoint'],protocol=p['protocol'],version=p['version'],udp_port=p['port']),201
+    import routewolf
+    port = routewolf.external_port(p) if routewolf.is_wrapped(p) else p['port']
+    return jsonify(ok=True,ids=ids,profile_id=p['id'],endpoint=p['endpoint'],protocol=p['protocol'],version=p['version'],udp_port=port),201
 
 @app.patch('/api/clients/<int:ident>')
 @auth
@@ -328,7 +341,8 @@ def version_bundle():
 def config(ident):
     with state.connection() as con:
         c=client_by_id(con,ident); text=versions.configuration(con,c,number(request.args.get('variant',c['download_variant_id']),0,10**10))
-    return app.response_class(text,mimetype='text/plain',headers={'Content-Disposition':f'attachment; filename="client-{ident}.conf"'})
+    suffix = '-routewolf' if '\n[RouteWolf]\n' in text else ''
+    return app.response_class(text,mimetype='text/plain',headers={'Content-Disposition':f'attachment; filename="client-{ident}{suffix}.conf"'})
 
 @app.get('/api/clients/<int:ident>/qr')
 @auth
@@ -336,6 +350,8 @@ def qr(ident):
     import qrcode
     with state.connection() as con:
         c=client_by_id(con,ident); text=versions.configuration(con,c,number(request.args.get('variant',c['download_variant_id']),0,10**10))
+    if '\n[RouteWolf]\n' in text:
+        raise Problem('Use the RouteWolf configuration download for this OpenWrt profile',409)
     out=io.BytesIO(); qrcode.make(text).save(out,format='PNG')
     return app.response_class(out.getvalue(),mimetype='image/png')
 
@@ -348,6 +364,8 @@ def import_client():
     interface,peer=parse_config(upload.read(65537).decode('utf-8-sig'))
     with state.LOCK,state.connection() as con:
         p=profile_by_id(con,request.form.get('profile_id'))
+        import routewolf
+        if routewolf.is_wrapped(p): raise Problem('Create RouteWolf clients in the panel or restore from a panel backup',409)
         if peer['PublicKey']!=p['public_key']: raise Problem('Different server key. Import the original SERVER configuration first; replacing the client key would break migration.',409)
         for k in PARAMS:
             if interface.get(k)!=json.loads(p['params']).get(k): raise Problem('Obfuscation parameters do not match the server: '+k,409)

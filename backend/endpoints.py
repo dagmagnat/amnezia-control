@@ -8,6 +8,7 @@ import subprocess
 import time
 
 import core
+import routewolf
 import state
 
 
@@ -36,6 +37,9 @@ def check(profile):
         local_matches = None
     try:
         bound = core.command(core.binary(profile), 'show', profile['interface'], 'listen-port')
+        if routewolf.is_wrapped(profile):
+            core.command('systemctl', 'is-active', routewolf.service(profile))
+            bound = str(routewolf.external_port(profile))
     except core.Problem:
         bound = ''
     return {'endpoint': destination, 'addresses': sorted(map(str, addresses)), 'local_matches': local_matches,
@@ -47,8 +51,13 @@ def change_host(con, hostname):
     def replace(destination, fallback=None):
         port=destination.rsplit(':',1)[1] if destination else fallback
         return core.endpoint(('['+hostname+']' if ':' in hostname else hostname)+':'+str(port))
-    profiles=[(replace(r['endpoint'],r['port']),r['id']) for r in con.execute('SELECT id,endpoint,port FROM profiles')
-              if replace(r['endpoint'],r['port'])!=r['endpoint']]
+    profiles=[]
+    for row in con.execute('SELECT * FROM profiles'):
+        updated = replace(row['endpoint'], row['port'])
+        if updated != row['endpoint']:
+            if routewolf.is_wrapped(row):
+                routewolf.check_endpoint_change(row, updated)
+            profiles.append((updated, row['id']))
     clients=[(replace(r['endpoint']),r['id']) for r in con.execute("SELECT id,endpoint FROM clients WHERE endpoint!=''")
              if replace(r['endpoint'])!=r['endpoint']]
     if profiles or clients:

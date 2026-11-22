@@ -206,4 +206,7 @@ def client_config(row, profile):
     lines += ['Endpoint = '+destination,'AllowedIPs = '+original_peer.get('AllowedIPs','0.0.0.0/0')]
     if not original_peer or 'PersistentKeepalive' in original_peer:
         lines += ['PersistentKeepalive = '+original_peer.get('PersistentKeepalive','25')]
+    import routewolf
+    if routewolf.is_wrapped(profile):
+        lines += ['', '[RouteWolf]', 'Key = '+routewolf.key_for_peer(row['preshared_key'])]
     return '\n'.join(lines)+'\n'

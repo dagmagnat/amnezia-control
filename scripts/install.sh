@@ -62,6 +62,7 @@ printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-amnezia-control.conf
 sysctl -p /etc/sysctl.d/99-amnezia-control.conf
 modprobe wireguard
 install -m 644 "$APP_DIR/systemd/ac-awg@.service" /etc/systemd/system/ac-awg@.service
+install -m 644 "$APP_DIR/systemd/ac-routewolf@.service" /etc/systemd/system/ac-routewolf@.service
 systemctl daemon-reload
 printf '%s' "$PANEL_IP" | "$APP_DIR/.venv/bin/python" -c 'import sys,json;print(json.dumps(dict(host=sys.stdin.read())))' | "$APP_DIR/.venv/bin/python" "$APP_DIR/backend/manage.py" provision
 install -m 644 "$APP_DIR/systemd/amnezia-control.service" /etc/systemd/system/amnezia-control.service

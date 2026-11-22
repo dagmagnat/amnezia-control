@@ -103,14 +103,14 @@ def validate(data):
 
     profiles = {row['id']: row for row in data['profiles']}
     networks = {}
-    interfaces, ports = set(), set()
+    interfaces, ports, transport_ports = set(), set(), set()
     for ident, profile in profiles.items():
         protocol, version = profile['protocol'], profile['version']
         require(protocol in ('wireguard', 'amneziawg'))
         require(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,14}', profile['interface']))
         if profile['interface'].startswith('acawg'):
             require(protocol == 'amneziawg' and re.fullmatch(r'acawg[0-9]+', profile['interface']))
-        require(profile['interface'] not in interfaces and profile['port'] not in ports)
+        require(profile['interface'] not in interfaces and profile['port'] not in ports | transport_ports)
         interfaces.add(profile['interface'])
         ports.add(profile['port'])
         require(1 <= profile['port'] <= 65535 and 576 <= profile['mtu'] <= 9000)
@@ -125,7 +125,12 @@ def validate(data):
         params = json.loads(profile['params'])
         require(isinstance(params, dict) and all(isinstance(value, str) for value in params.values()))
         if protocol == 'wireguard':
-            require(version in ('wg', 'legacy') and not params)
+            require(version in ('wg', 'legacy', 'routewolf') and not params)
+            if version == 'routewolf':
+                require(re.fullmatch(r'acwg[0-9]+', profile['interface']) and profile['endpoint'])
+                listener = int(profile['endpoint'].rsplit(':', 1)[1])
+                require(1024 <= listener <= 65535 and listener not in ports | transport_ports)
+                transport_ports.add(listener)
         elif version == 'legacy':
             require(not params)
         else:
@@ -146,7 +151,7 @@ def validate(data):
         peer_keys.add((ident, peer['public_key']))
         core.key(peer['public_key'])
         core.key(peer['private_key'], optional='client_id' not in peer)
-        core.key(peer['preshared_key'], optional=True)
+        core.key(peer['preshared_key'], optional=profiles[ident]['version'] != 'routewolf')
         if 'client_id' in peer:
             owner = clients.get(peer['client_id'])
             membership = (peer['client_id'], ident)
@@ -218,6 +223,9 @@ def snapshot(con, starters):
 
 
 def stop_profile(profile):
+    import routewolf
+    if routewolf.is_wrapped(profile):
+        routewolf.cleanup(profile)
     service = core.service(profile)
     core.command('systemctl', 'stop', service)
     core.command('systemctl', 'disable', service)

@@ -45,6 +45,7 @@ export AMNEZIA_CONTROL_ROOT=$APP_DIR AMNEZIA_CONTROL_DATA=/var/lib/amnezia-contr
 "$APP_DIR/.venv/bin/python" "$APP_DIR/backend/manage.py" web-limits
 install -m 644 "$APP_DIR/systemd/amnezia-control.service" /etc/systemd/system/amnezia-control.service
 install -m 644 "$APP_DIR/systemd/ac-awg@.service" /etc/systemd/system/ac-awg@.service
+install -m 644 "$APP_DIR/systemd/ac-routewolf@.service" /etc/systemd/system/ac-routewolf@.service
 systemctl daemon-reload
 bash "$APP_DIR/scripts/setup-warp-units.sh"
 systemctl reset-failed amnezia-control

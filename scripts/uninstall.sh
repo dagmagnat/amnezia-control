@@ -23,6 +23,8 @@ con=sqlite3.connect('/var/lib/amnezia-control/control.db');con.row_factory=sqlit
 for p in con.execute('SELECT * FROM profiles'):
     # Never automatically remove adopted legacy interfaces.
     if not p['interface'].startswith(('acwg','acawg')): continue
+    if p['protocol'] == 'wireguard' and p['version'] == 'routewolf':
+        subprocess.run(['systemctl','disable','--now','ac-routewolf@'+p['interface']+'.service'],check=True)
     service=('ac-awg' if p['protocol']=='amneziawg' else 'wg-quick')+'@'+p['interface']
     subprocess.run(['systemctl','disable','--now',service],check=True)
     root=Path('/etc/amnezia/amneziawg' if p['protocol']=='amneziawg' else '/etc/wireguard')
@@ -41,6 +43,7 @@ if [[ ${MODE:-1} == 2 ]]; then
   fi
   rm -f /etc/systemd/system/ac-awg-reply-refresh.service /etc/systemd/system/ac-awg-reply-refresh.timer
   rm -f /etc/systemd/system/ac-awg@.service /etc/systemd/system/ac-warp-{guard,network,client,watch}.service /etc/systemd/system/ac-warp-watch.timer
+  rm -f /etc/systemd/system/ac-routewolf@.service /usr/local/libexec/amnezia-control/routewolf-wg-transport
   rm -rf /var/lib/amnezia-control /etc/amnezia-control /opt/amnezia-control
   systemctl daemon-reload
 else

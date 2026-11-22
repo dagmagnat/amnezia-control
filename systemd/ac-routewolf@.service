@@ -1,0 +1,21 @@
+[Unit]
+Description=RouteWolf UDP transport for %i
+After=network-online.target wg-quick@%i.service
+Wants=network-online.target
+Requires=wg-quick@%i.service
+
+[Service]
+Type=exec
+ExecStart=/usr/local/libexec/amnezia-control/routewolf-wg-transport /etc/amnezia-control/routewolf/%i.json
+Restart=on-failure
+RestartSec=3s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_UNIX
+InaccessiblePaths=-/etc/wireguard -/etc/amnezia -/etc/shadow
+
+[Install]
+WantedBy=multi-user.target
