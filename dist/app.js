@@ -14,8 +14,42 @@ Object.assign(ru,{makePrimary:'Сделать основной для скачи
 let versionClientId=0;let versionIds=[];
 const selectedIds=new Set();let visibleClients=[],pendingDeleteIds=[];
 const downloadIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg>';
+const powerIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8m5-5a8 8 0 1 1-10 0"/></svg>';
+const pendingAccess=new Set();
+const clientSortCycles={
+ name:['nameReverse','name'],protocol:['protocol','protocolReverse'],
+ traffic:['traffic','trafficReverse'],activity:['online','recent'],
+ expiry:['expiry','expiryReverse'],status:['status','statusReverse']
+};
+const clientSortDirections={
+ name:'ascending',nameReverse:'descending',protocol:'ascending',protocolReverse:'descending',
+ traffic:'descending',trafficReverse:'ascending',online:'other',recent:'descending',
+ expiry:'ascending',expiryReverse:'descending',status:'other',statusReverse:'other'
+};
+const statusRank={online:0,offline:1,expired:2,quota:3,disabled:4};
+Object.assign(ru,{
+ accessEnable:'Включить клиента',accessDisable:'Выключить клиента',
+ accessEnabled:'Клиент включён',accessDisabled:'Клиент выключен',
+ accessRestricted:'Клиент включён, но срок действия или лимит трафика ограничивает доступ.',
+ configLoading:'Загрузка конфигурации…',configFailed:'Не удалось загрузить конфигурацию.',
+ configCopied:'Конфигурация скопирована',configCopyManual:'Текст выделен. Нажмите Ctrl+C или ⌘C, чтобы скопировать.'
+});
+Object.assign(en,{
+ accessEnable:'Enable client',accessDisable:'Disable client',
+ accessEnabled:'Client enabled',accessDisabled:'Client disabled',
+ accessRestricted:'Client enabled, but expiry or traffic quota still restricts access.',
+ viewConfig:'View configuration',configTitle:'Configuration',copyConfig:'Copy',
+ configLoading:'Loading configuration…',configFailed:'Could not load the configuration.',
+ configCopied:'Configuration copied',configCopyManual:'Text selected. Press Ctrl+C or ⌘C to copy.',
+ sortDefault:'Default order',sortNameReverse:'By name, reversed',sortProtocol:'By protocol',
+ sortProtocolReverse:'By protocol, reversed',sortTraffic:'Highest traffic first',
+ sortTrafficReverse:'Lowest traffic first',sortOnline:'Online first',sortRecent:'Most recently active first',
+ sortExpiryReverse:'Latest expiry first',sortStatus:'Access allowed first',
+ sortStatusReverse:'Restricted access first',
+ preferredVersionNote:'Save to use this generation for viewing, downloads and QR. Existing files keep using the original connection.'
+});
 const original={}; $$('[data-i18n]').forEach(el=>{original[el.dataset.i18n]=el.textContent;});
-let lang=localStorage.getItem('ac-language')||'ru', csrf='', me={}, data={clients:[],profiles:[],events:[],panel:{}}, page='overview', polling=false;
+let lang=localStorage.getItem('ac-language')||'ru', csrf='', me={}, data={clients:[],profiles:[],events:[],panel:{}}, page='overview', summaryRequest=null;
 const t=k=>lang==='en'?(en[k]||k):(ru[k]||original[k]||k);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function translate(){document.documentElement.lang=lang; $$('[data-i18n]').forEach(el=>el.textContent=t(el.dataset.i18n)); $('#loginLanguage').value=lang; $('#settingsForm [name=language]').value=lang; $('#pageTitle').textContent=t(page==='servers'?'profiles':page==='imports'?'import':page==='docs'?'help':page);$('#clientForm button.primary').textContent=$('#clientForm').elements.id.value?t('save'):t('createAction');$('#logout').title=t('logout');$('#logout').setAttribute('aria-label',t('logout'));$('#accountSettings').setAttribute('aria-label',t('accountSettings'));$('#selectAll').setAttribute('aria-label',t('selectAll'));$('#search').placeholder=lang==='ru'?'Поиск по имени, описанию, IP':'Search name, description, IP';}
@@ -49,16 +83,60 @@ function clientState(c){if(!c.enabled)return 'disabled';const now=Date.now()/100
 function matchesStatus(c,filter){const state=clientState(c);if(filter==='all')return true;if(filter==='enabled')return ['online','offline'].includes(state);if(filter==='expiring'){const end=Number(c.expires_at);return c.enabled&&end>Date.now()/1000&&end<=Date.now()/1000+7*86400;}return state===filter;}
 function renderSelection(){const selected=visibleClients.filter(c=>selectedIds.has(c.id)).length;$('#selectAll').checked=visibleClients.length>0&&selected===visibleClients.length;$('#selectAll').indeterminate=selected>0&&selected<visibleClients.length;$('#selectAll').disabled=!visibleClients.length;$('#selectVisible').disabled=!visibleClients.length;$('#selectVisible').setAttribute('aria-pressed',String(visibleClients.length>0&&selected===visibleClients.length));$('#selectVisible').title=t('selectAll');$('#addVersion').disabled=!data.clients.length;$('#selectionCount').textContent=selectedIds.size?t('selected')+': '+selectedIds.size:'';$('#clearSelection').hidden=!selectedIds.size;$('#bulkDelete').hidden=!selectedIds.size;$('#openBulkActions').hidden=!selectedIds.size;$$('[data-select-client]').forEach(el=>{el.checked=selectedIds.has(Number(el.dataset.selectClient));el.closest('tr').classList.toggle('selected-row',el.checked);});}
 function preferred(c){return (c.versions||[]).find(v=>v.id===(c.download_variant_id||0))||c;}
+function protocolLabel(v){
+ return v.version==='legacy'?'WireGuard / legacy':v.protocol==='wireguard'?'WireGuard':'AWG '+v.version;
+}
+function configPath(id,variant){return `/api/clients/${id}/config?variant=${variant}`;}
+function compareClients(a,b,sort){
+ const byName=()=>a.name.localeCompare(b.name,lang,{numeric:true});
+ const byProtocol=()=>protocolLabel(preferred(a)).localeCompare(protocolLabel(preferred(b)),lang,{numeric:true});
+ const byRecent=()=>b.handshake-a.handshake;
+ switch(sort){
+ case 'nameReverse': return -byName();
+ case 'protocol': return byProtocol();
+ case 'protocolReverse': return -byProtocol();
+ case 'traffic': return b.used_bytes-a.used_bytes;
+ case 'trafficReverse': return a.used_bytes-b.used_bytes;
+ case 'online': return Number(clientState(b)==='online')-Number(clientState(a)==='online')||byRecent();
+ case 'recent': return byRecent();
+ case 'expiry':
+ case 'expiryReverse': {
+  const missing=Number(!a.expires_at)-Number(!b.expires_at);
+  return missing||(a.expires_at-b.expires_at)*(sort==='expiry'?1:-1);
+ }
+ case 'status': return statusRank[clientState(a)]-statusRank[clientState(b)];
+ case 'statusReverse': return statusRank[clientState(b)]-statusRank[clientState(a)];
+ case 'newest': return b.created_at-a.created_at;
+ default: return 0;
+ }
+}
+function renderClientSort(sort){
+ $$('[data-client-sort]').forEach(button=>{
+  const header=button.closest('th'), active=clientSortCycles[button.dataset.clientSort].includes(sort);
+  if(active)header.setAttribute('aria-sort',clientSortDirections[sort]);
+  else header.removeAttribute('aria-sort');
+  button.querySelector('.sort-arrow').textContent=active?(sort==='online'||sort==='statusReverse'||clientSortDirections[sort]==='ascending'?'↑':'↓'):'↕';
+ });
+}
+$$('[data-client-sort]').forEach(button=>button.onclick=()=>{
+ const order=$('#sortOrder'), cycle=clientSortCycles[button.dataset.clientSort];
+ order.value=cycle[cycle.indexOf(order.value)+1]||'default';
+ renderClients();
+});
 function renderClients(){
  const q=$('#search').value.toLocaleLowerCase(lang),filter=$('#statusFilter').value,sort=$('#sortOrder').value;
  const known=new Set(data.clients.map(c=>c.id));for(const id of selectedIds)if(!known.has(id))selectedIds.delete(id);
  visibleClients=data.clients.filter(c=>(c.name+' '+c.address+' '+c.description).toLocaleLowerCase(lang).includes(q)&&matchesStatus(c,filter));
- const expiry=c=>Number(c.expires_at)||Infinity;
- visibleClients.sort((a,b)=>{let n=sort==='expiry'?(expiry(a)===expiry(b)?0:expiry(a)-expiry(b)):sort==='newest'?b.created_at-a.created_at:sort==='traffic'?b.used_bytes-a.used_bytes:0;return n||a.name.localeCompare(b.name,lang,{numeric:true})||a.id-b.id;});
+ visibleClients.sort((a,b)=>compareClients(a,b,sort)||a.name.localeCompare(b.name,lang,{numeric:true})||a.id-b.id);
+ renderClientSort(sort);
  $('#tableCount').textContent=visibleClients.length+' / '+data.clients.length;$('#empty').hidden=visibleClients.length>0;$('#empty').textContent=page==='overview'&&filter==='online'?t('noOnline'):data.clients.length?t('noMatches'):t('noClients');
  $$('#overviewFilters [data-quick-filter]').forEach(el=>{el.setAttribute('aria-pressed',String(el.dataset.quickFilter===filter));el.querySelector('b').textContent=data.clients.filter(c=>matchesStatus(c,el.dataset.quickFilter)).length;});
- $('#clientRows').innerHTML=visibleClients.map(c=>{const status=clientState(c),label=status==='quota'?t('quotaHit'):t(status),main=preferred(c);const lastSeen=c.handshake?(()=>{const now=Date.now()/1000,diff=now-c.handshake;if(diff<60)return t('justNow');if(diff<3600)return Math.floor(diff/60)+' '+t('minAgo');if(diff<86400)return Math.floor(diff/3600)+' '+t('hourAgo');return Math.floor(diff/86400)+' '+t('dayAgo');})():t('neverConnected');return `<tr data-row="${c.id}"><td class="select-cell"><input type="checkbox" data-select-client="${c.id}" aria-label="${t('selectClient')}: ${esc(c.name)}"></td><td class="identity-cell"><button class="client-name" data-client="${c.id}">${esc(c.name)}</button><small class="client-address">${esc(main.address)}</small>${c.description?`<p class="client-description">${esc(c.description)}</p>`:''}</td><td class="protocol-cell">${esc(main.version==='legacy'?'WireGuard / legacy':main.protocol==='wireguard'?'WireGuard':'AWG '+main.version)}${c.versions&&c.versions.length>1?`<small class="additional-versions">+ ${c.versions.filter(v=>v.id!==(c.download_variant_id||0)).map(v=>(v.protocol==='wireguard'?'WG':'AWG '+esc(v.version))).join(' · ')}</small>`:''}</td><td class="traffic-cell">${bytes(c.used_bytes)}<small>${c.quota_bytes?'/ '+bytes(c.quota_bytes):t('unlimited')}</small></td><td class="last-seen-cell"><span class="last-seen ${status==='online'?'online-indicator':''}">${lastSeen}</span></td><td class="expires-cell">${date(c.expires_at)}</td><td class="status-cell"><span class="pill status-${status}">${label}</span></td><td class="actions-cell"><div class="row-actions"><button data-client="${c.id}">${t('edit')}</button>${c.downloadable?`<a class="button icon-button download-link" href="/api/clients/${c.id}/config?variant=${c.download_variant_id||0}" download title="${t('download')}" aria-label="${t('download')}: ${esc(c.name)}">${downloadIcon}</a><button data-qr="${c.id}" aria-label="QR: ${esc(c.name)}">QR</button>`:`<small>${t('noKey')}</small>`}</div></td></tr>`;}).join('');
+ $('#clientRows').innerHTML=visibleClients.map(c=>{const status=clientState(c),label=status==='quota'?t('quotaHit'):t(status),main=preferred(c);const lastSeen=c.handshake?(()=>{const now=Date.now()/1000,diff=now-c.handshake;if(diff<60)return t('justNow');if(diff<3600)return Math.floor(diff/60)+' '+t('minAgo');if(diff<86400)return Math.floor(diff/3600)+' '+t('hourAgo');return Math.floor(diff/86400)+' '+t('dayAgo');})():t('neverConnected');return `<tr data-row="${c.id}"><td class="select-cell"><input type="checkbox" data-select-client="${c.id}" aria-label="${t('selectClient')}: ${esc(c.name)}"></td><td class="identity-cell"><button class="client-name" data-client="${c.id}">${esc(c.name)}</button><small class="client-address">${esc(main.address)}</small>${c.description?`<p class="client-description">${esc(c.description)}</p>`:''}</td><td class="protocol-cell">${esc(protocolLabel(main))}${c.versions&&c.versions.length>1?`<small class="additional-versions">+ ${c.versions.filter(v=>v.id!==(c.download_variant_id||0)).map(v=>(v.protocol==='wireguard'?'WG':'AWG '+esc(v.version))).join(' · ')}</small>`:''}</td><td class="traffic-cell">${bytes(c.used_bytes)}<small>${c.quota_bytes?'/ '+bytes(c.quota_bytes):t('unlimited')}</small></td><td class="last-seen-cell"><span class="last-seen ${status==='online'?'online-indicator':''}">${lastSeen}</span></td><td class="expires-cell">${date(c.expires_at)}</td><td class="status-cell"><span class="pill status-${status}">${label}</span></td><td class="actions-cell"><div class="row-actions"><button data-client="${c.id}">${t('edit')}</button>${c.downloadable?`<a class="button icon-button download-link" href="${configPath(c.id,c.download_variant_id||0)}" download title="${t('download')}" aria-label="${t('download')}: ${esc(c.name)}">${downloadIcon}</a><button data-qr="${c.id}" aria-label="QR: ${esc(c.name)}">QR</button>`:`<small>${t('noKey')}</small>`}${clientAccessButton(c)}</div></td></tr>`;}).join('');
  renderSelection();
+}
+function clientAccessButton(c){
+ const action=t(c.enabled?'accessDisable':'accessEnable');
+ return `<button type="button" class="icon-button client-access" data-client-access="${c.id}" data-enabled="${Boolean(c.enabled)}" title="${action}" aria-label="${action}: ${esc(c.name)}"${pendingAccess.has(c.id)?' disabled':''}>${powerIcon}</button>`;
 }
 function changeFilter(){selectedIds.clear();renderClients();}
 function toggleVisible(checked){visibleClients.forEach(c=>checked?selectedIds.add(c.id):selectedIds.delete(c.id));renderSelection();}
@@ -68,7 +146,15 @@ $('#overviewFilters').onclick=e=>{const button=e.target.closest('[data-quick-fil
 $('#bulkDelete').onclick=()=>{pendingDeleteIds=[...selectedIds];const rows=data.clients.filter(c=>selectedIds.has(c.id));$('#bulkDeleteSummary').textContent=(lang==='ru'?'Будут удалены клиенты: ':'Clients to delete: ')+rows.length;$('#bulkDeleteNames').innerHTML=rows.map(c=>`<div><strong>${esc(c.name)}</strong><small>${esc(c.address)}</small></div>`).join('');$('#bulkDeleteError').textContent='';$('#bulkDeleteDialog').showModal();};
 $('#confirmBulkDelete').onclick=async()=>{const button=$('#confirmBulkDelete');button.disabled=true;try{const result=await api('clients/bulk-delete',{method:'POST',body:JSON.stringify({ids:pendingDeleteIds})});selectedIds.clear();$('#bulkDeleteDialog').close();await load();toast(t('deleteDone')+': '+result.deleted+'. '+t('deleteBackup')+'.');}catch(err){$('#bulkDeleteError').textContent=err.message;}finally{button.disabled=false;}};
 function startupFailed(err){$('#startupSpinner').hidden=true;$('#startupLabel').textContent=t('startupFailed');$('#startupError').textContent=err.name==='AbortError'?t('startupTimeout'):err.message;$('#retryStartup').hidden=false;}
-async function load(signal){if(polling)return false;polling=true;try{data=await api('summary',signal?{signal}:{});error('');$('#connection').textContent=t('connected');render();showApp();return true;}catch(e){if(!$('#startupScreen').hidden)startupFailed(e);else if(!$('#loginScreen').hidden)$('#loginError').textContent=e.message;else{error(e.message);$('#connection').textContent=t('failed');}return false;}finally{polling=false;}}
+function load(signal){
+ if(summaryRequest)return summaryRequest;
+ summaryRequest=(async()=>{
+  try{data=await api('summary',signal?{signal}:{});error('');$('#connection').textContent=t('connected');render();showApp();return true;}
+  catch(e){if(!$('#startupScreen').hidden)startupFailed(e);else if(!$('#loginScreen').hidden)$('#loginError').textContent=e.message;else{error(e.message);$('#connection').textContent=t('failed');}return false;}
+  finally{summaryRequest=null;}
+ })();
+ return summaryRequest;
+}
 $('#loginLanguage').onchange=e=>{lang=e.target.value;localStorage.setItem('ac-language',lang);translate();};
 $('#loginForm').onsubmit=async e=>{e.preventDefault();const form=new FormData(e.target);try{await api('login',{method:'POST',body:JSON.stringify(Object.fromEntries(form))});me=await api('me');$('#loginError').textContent='';e.target.password.value='';await load();}catch(err){$('#loginError').textContent=err.message;}};
 $('#logout').onclick=async()=>{try{await api('logout',{method:'POST'});}finally{showLogin();csrf='';me=await api('me');}};
@@ -76,12 +162,82 @@ $('#nav').onclick=e=>{const b=e.target.closest('[data-page]');if(b){choosePage(b
 $('#search').oninput=changeFilter;$('#statusFilter').onchange=changeFilter;$('#sortOrder').onchange=renderClients;$('#accountSettings').onclick=()=>{choosePage('settings');closeMenu();};
 $$('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
 function showClient(id){const form=$('#clientForm');form.reset();const c=data.clients.find(c=>c.id===id);$('#clientError').textContent='';$('#clientCreation').hidden=!!c;$('#clientExisting').hidden=!c;$('#clientDialogTitle').textContent=c?c.name:t('createClient');form.querySelector('button.primary').textContent=c?t('save'):t('createAction');form.elements.id.value=c?c.id:'';$('#clientLimits').open=false;updateClientProtocol();
- if(c){for(const k of ['name','description','endpoint'])form.elements[k].value=c[k]||'';form.quota_gb.value=c.quota_bytes/1073741824;form.expires_at.value=dtInput(c.expires_at);form.enabled.checked=!!c.enabled;$('#downloadConfig').href='/api/clients/'+id+'/config';$('#downloadConfig').hidden=!c.downloadable;$('#showQr').hidden=!c.downloadable;$('#downloadVersion').innerHTML=(c.versions||[{id:0,protocol:c.protocol,version:c.version,address:c.address}]).map(v=>`<option value="${v.id}">${esc(v.protocol==='wireguard'?'WireGuard':'AmneziaWG '+v.version)} · ${esc(v.address)}</option>`).join('');$('#downloadVersion').value=String(c.download_variant_id||0);$('#downloadVersion').onchange();$('#clientInfo').textContent='Public key: '+c.public_key+'\n'+date(c.created_at);}
+ if(c){for(const k of ['name','description','endpoint'])form.elements[k].value=c[k]||'';form.quota_gb.value=c.quota_bytes/1073741824;form.expires_at.value=dtInput(c.expires_at);form.enabled.checked=!!c.enabled;$('#downloadVersion').innerHTML=(c.versions||[{id:0,protocol:c.protocol,version:c.version,address:c.address}]).map(v=>`<option value="${v.id}">${esc(v.protocol==='wireguard'?'WireGuard':'AmneziaWG '+v.version)} · ${esc(v.address)}</option>`).join('');$('#downloadVersion').value=String(c.download_variant_id||0);$('#downloadVersion').onchange();$('#clientInfo').textContent='Public key: '+c.public_key+'\n'+date(c.created_at);}
  $('#clientDialog').showModal();}
 $('#openCreate').onclick=()=>showClient();
 function updateClientProtocol(){const value=$('#clientForm input[name=client_protocol]:checked').value;$('#clientVersionField').hidden=value==='wireguard';}
 $$('#clientForm input[name=client_protocol]').forEach(el=>el.onchange=updateClientProtocol);
-$('#clientRows').onclick=e=>{const open=e.target.closest('[data-client]'),qr=e.target.closest('[data-qr]');if(open)showClient(Number(open.dataset.client));if(qr)showQR(Number(qr.dataset.qr));};
+$('#clientRows').onclick=e=>{
+ const open=e.target.closest('[data-client]'),qr=e.target.closest('[data-qr]'),access=e.target.closest('[data-client-access]');
+ if(open)showClient(Number(open.dataset.client));
+ if(qr)showQR(Number(qr.dataset.qr));
+ if(access)toggleClientAccess(Number(access.dataset.clientAccess),access);
+};
+async function toggleClientAccess(id,button){
+ const client=data.clients.find(c=>c.id===id);
+ if(!client||pendingAccess.has(id))return;
+ const enabled=!client.enabled;
+ pendingAccess.add(id);
+ button.disabled=true;
+ try{
+  const result=await api('clients/bulk-update',{method:'POST',body:JSON.stringify({ids:[id],action:enabled?'enable':'disable'})});
+  if(summaryRequest)await summaryRequest;
+  const current=data.clients.find(c=>c.id===id);
+  if(current){
+   current.enabled=enabled;
+   if(enabled&&!result.restricted)current.blocked_reason='';
+  }
+  await load();
+  toast(t(enabled?(result.restricted?'accessRestricted':'accessEnabled'):'accessDisabled'));
+ }catch(err){toast(err.message);}
+ finally{pendingAccess.delete(id);renderClients();}
+}
+let configRequest=null;
+$('#viewConfig').onclick=async()=>{
+ const id=Number($('#clientForm').elements.id.value),variant=Number($('#downloadVersion').value);
+ const client=data.clients.find(c=>c.id===id);
+ if(!client)return;
+ const dialog=$('#configDialog'),field=$('#configText'),status=$('#configStatus');
+ const request=new AbortController();
+ configRequest=request;
+ $('#configClientLabel').textContent=client.name+' · '+$('#downloadVersion').selectedOptions[0].textContent;
+ field.value='';field.hidden=true;$('#copyConfig').disabled=true;
+ status.textContent=t('configLoading');
+ dialog.showModal();
+ try{
+  const response=await fetch(configPath(id,variant),{cache:'no-store',signal:request.signal});
+  if(response.status===401){showLogin();return;}
+  if(!response.ok||!response.headers.get('Content-Type')?.startsWith('text/plain'))throw Error(t('configFailed'));
+  const configuration=await response.text();
+  if(!dialog.open||configRequest!==request)return;
+  field.value=configuration;
+  field.hidden=false;$('#copyConfig').disabled=false;status.textContent='';
+ }catch{
+  if(dialog.open&&configRequest===request)status.textContent=t('configFailed');
+ }
+};
+$('#configDialog').addEventListener('close',()=>{
+ configRequest?.abort();
+ configRequest=null;
+ $('#configText').value='';
+ $('#configText').hidden=true;
+ $('#copyConfig').disabled=true;
+ $('#configStatus').textContent='';
+ $('#configClientLabel').textContent='';
+});
+$('#copyConfig').onclick=async()=>{
+ const field=$('#configText'),status=$('#configStatus'),request=configRequest;
+ let copied=false;
+ try{
+  await navigator.clipboard.writeText(field.value);
+  copied=true;
+ }catch{
+  if(!$('#configDialog').open||configRequest!==request)return;
+  field.focus();field.select();
+  try{copied=document.execCommand('copy');}catch{}
+ }
+ if($('#configDialog').open&&configRequest===request)status.textContent=t(copied?'configCopied':'configCopyManual');
+};
 function showQR(id,variant=null){
  const c=data.clients.find(c=>c.id===id);if(!c)return;if(variant===null)variant=c.download_variant_id||0;
  const v=(c.versions||[]).find(v=>v.id===variant)||c;
@@ -195,7 +351,14 @@ Object.assign(en,{settingsGeneral:'VPN & account',settingsAccess:'Address & back
 $('.settings-tabs').onclick=e=>{const button=e.target.closest('[data-settings-tab]');if(!button)return;$('#settingsPage').dataset.tab=button.dataset.settingsTab;document.querySelector('[data-settings-pane='+button.dataset.settingsTab+']').scrollTop=0;$$('[data-settings-tab]').forEach(el=>el.setAttribute('aria-pressed',String(el===button)));};
 translate();
 
-$('#downloadVersion').onchange=()=>{const id=$('#clientForm').elements.id.value;$('#downloadConfig').href='/api/clients/'+id+'/config?variant='+Number($('#downloadVersion').value);const c=data.clients.find(c=>c.id===Number(id)),available=(c.versions||[]).find(v=>v.id===Number($('#downloadVersion').value))?.downloadable??c.downloadable;$('#downloadConfig').hidden=!available;$('#showQr').hidden=!available;};
+$('#downloadVersion').onchange=()=>{
+ const id=Number($('#clientForm').elements.id.value),variant=Number($('#downloadVersion').value);
+ const c=data.clients.find(c=>c.id===id);
+ if(!c)return;
+ const available=(c.versions||[]).find(v=>v.id===variant)?.downloadable??c.downloadable;
+ $('#downloadConfig').href=configPath(id,variant);
+ for(const selector of ['#downloadConfig','#showQr','#viewConfig'])$(selector).hidden=!available;
+};
 $('#addVersion').onclick=()=>{versionClientId=0;versionIds=selectedIds.size?[...selectedIds]:data.clients.map(c=>c.id);$('#versionSummary').textContent=(lang==='ru'?'Клиентов: ':'Clients: ')+versionIds.length+(selectedIds.size?'':(lang==='ru'?' · все клиенты':' · all clients'));$('#versionError').classList.remove('success-text');$('#versionError').textContent='';$('#versionBundle').hidden=true;$('#confirmVersion').hidden=false;$('#targetVersion').disabled=false;$('#versionDialog').showModal();};
 $('#confirmVersion').onclick=async()=>{const button=$('#confirmVersion'),version=$('#targetVersion').value;button.disabled=true;$('#versionError').classList.remove('success-text');$('#versionError').textContent=t('creating');try{const result=await api('clients/add-version',{method:'POST',body:JSON.stringify({ids:versionIds,version,set_primary:$('#versionPrimary').checked})});await load();if(versionClientId){const c=data.clients.find(c=>c.id===versionClientId),v=c.versions.find(v=>v.protocol==='amneziawg'&&v.version===version);$('#downloadVersion').innerHTML=c.versions.map(v=>`<option value="${v.id}">${esc(v.protocol==='wireguard'?'WireGuard':'AmneziaWG '+v.version)} · ${esc(v.address)}</option>`).join('');if(v)$('#downloadVersion').value=String(v.id);$('#downloadVersion').onchange();}$('#versionError').classList.add('success-text');$('#versionError').textContent=(lang==='ru'?'Добавлено: ':'Added: ')+result.created+(lang==='ru'?' · уже есть: ':' · already available: ')+result.skipped;$('#versionBundle').href='/api/clients/version-bundle?version='+encodeURIComponent(version)+'&ids='+versionIds.join(',');$('#versionBundle').hidden=false;button.hidden=true;$('#targetVersion').disabled=true;}catch(e){$('#versionError').classList.remove('success-text');$('#versionError').textContent=e.message;}finally{button.disabled=false;}};
 

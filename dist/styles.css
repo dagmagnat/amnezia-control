@@ -208,3 +208,29 @@ body:has(#appShell:not([hidden])){overflow:hidden}
     #settingsPage .warp-enable{padding:5px 0}
     #settingsPage .warp-policy{padding:6px 8px;margin-bottom:7px}
 }
+
+.client-sort{
+    display:inline-flex;align-items:center;gap:5px;min-height:26px;padding:0;
+    background:transparent;border:0;color:inherit;font:inherit;text-align:left;
+}
+.client-sort:hover,.client-sort:focus-visible,th[aria-sort] .client-sort{color:var(--purple)}
+.sort-arrow{font-size:12px;line-height:1}
+.row-actions .client-access{display:inline-grid;place-items:center;color:#a9b1c5}
+.row-actions .client-access[data-enabled=true]{color:var(--green)}
+.row-actions .client-access:hover{color:var(--purple)}
+#configDialog{width:min(720px,calc(100% - 24px));max-height:calc(100dvh - 24px)}
+#configClientLabel{margin:4px 0 0;overflow-wrap:anywhere}
+#configStatus{color:var(--muted);font-size:13px;margin:0 0 10px}
+#configStatus:empty{display:none}
+#configText{
+    display:block;width:100%;height:min(45dvh,24rem);padding:12px;
+    font:13px/1.55 ui-monospace,monospace;resize:none;overflow:auto;
+}
+#configText[hidden]{display:none}
+#configDialog .dialog-actions{margin-bottom:0}
+@media (min-width:1101px) and (max-width:1200px){
+    .table-scroll .last-seen-cell .client-sort{white-space:normal}
+    .table-scroll .status-cell,.table-scroll .actions-cell{width:auto}
+    .table-scroll .row-actions{gap:4px}
+    .table-scroll .row-actions .icon-button{width:33px;min-width:33px}
+}
