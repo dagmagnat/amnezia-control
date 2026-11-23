@@ -38,7 +38,7 @@ Object.assign(en,{
  accessEnable:'Enable client',accessDisable:'Disable client',
  accessEnabled:'Client enabled',accessDisabled:'Client disabled',
  accessRestricted:'Client enabled, but expiry or traffic quota still restricts access.',
- viewConfig:'View configuration',configTitle:'Configuration',copyConfig:'Copy',
+ clientQr:'QR code',viewConfig:'View configuration',configTitle:'Configuration',copyConfig:'Copy',
  configLoading:'Loading configuration…',configFailed:'Could not load the configuration.',
  configCopied:'Configuration copied',configCopyManual:'Text selected. Press Ctrl+C or ⌘C to copy.',
  sortDefault:'Default order',sortNameReverse:'By name, reversed',sortProtocol:'By protocol',
@@ -161,7 +161,7 @@ $('#logout').onclick=async()=>{try{await api('logout',{method:'POST'});}finally{
 $('#nav').onclick=e=>{const b=e.target.closest('[data-page]');if(b){choosePage(b.dataset.page);closeMenu();}};$('#refresh').onclick=()=>load();
 $('#search').oninput=changeFilter;$('#statusFilter').onchange=changeFilter;$('#sortOrder').onchange=renderClients;$('#accountSettings').onclick=()=>{choosePage('settings');closeMenu();};
 $$('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
-function showClient(id){const form=$('#clientForm');form.reset();const c=data.clients.find(c=>c.id===id);$('#clientError').textContent='';$('#clientCreation').hidden=!!c;$('#clientExisting').hidden=!c;$('#clientDialogTitle').textContent=c?c.name:t('createClient');form.querySelector('button.primary').textContent=c?t('save'):t('createAction');form.elements.id.value=c?c.id:'';$('#clientLimits').open=false;updateClientProtocol();
+function showClient(id){const form=$('#clientForm');form.reset();const c=data.clients.find(c=>c.id===id);$('#clientError').textContent='';$('#clientCreation').hidden=!!c;$('#clientExisting').hidden=!c;$('#deleteClient').hidden=!c;$('#clientDialogTitle').textContent=c?c.name:t('createClient');form.querySelector('button.primary').textContent=c?t('save'):t('createAction');form.elements.id.value=c?c.id:'';$('#clientLimits').open=false;updateClientProtocol();
  if(c){for(const k of ['name','description','endpoint'])form.elements[k].value=c[k]||'';form.quota_gb.value=c.quota_bytes/1073741824;form.expires_at.value=dtInput(c.expires_at);form.enabled.checked=!!c.enabled;$('#downloadVersion').innerHTML=(c.versions||[{id:0,protocol:c.protocol,version:c.version,address:c.address}]).map(v=>`<option value="${v.id}">${esc(v.protocol==='wireguard'?'WireGuard':'AmneziaWG '+v.version)} · ${esc(v.address)}</option>`).join('');$('#downloadVersion').value=String(c.download_variant_id||0);$('#downloadVersion').onchange();$('#clientInfo').textContent='Public key: '+c.public_key+'\n'+date(c.created_at);}
  $('#clientDialog').showModal();}
 $('#openCreate').onclick=()=>showClient();

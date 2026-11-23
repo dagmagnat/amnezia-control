@@ -228,6 +228,30 @@ body:has(#appShell:not([hidden])){overflow:hidden}
 }
 #configText[hidden]{display:none}
 #configDialog .dialog-actions{margin-bottom:0}
+#clientDialog{
+    max-height:calc(100dvh - 24px);
+    overflow-y:auto;
+}
+#clientForm .client-download{
+    display:flex;gap:8px;flex-wrap:nowrap;padding-top:0;
+}
+#clientForm .client-download>*{
+    display:flex;flex:1 1 0;min-width:0;align-items:center;justify-content:center;
+    text-align:center;white-space:normal;
+}
+#clientForm .client-download>[hidden]{display:none}
+@media (min-width:481px){
+    #clientForm .client-download>*{font-size:13px;padding-inline:6px}
+}
+#clientForm .version-choice-note{margin-bottom:10px}
+#clientError:empty{display:none}
+.client-form-actions{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    margin-top:12px;
+}
+@media (max-width:480px){
+    #clientForm .client-download{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 @media (min-width:1101px) and (max-width:1200px){
     .table-scroll .last-seen-cell .client-sort{white-space:normal}
     .table-scroll .status-cell,.table-scroll .actions-cell{width:auto}
